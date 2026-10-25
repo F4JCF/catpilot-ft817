@@ -98,6 +98,8 @@ class WorldMap(QWidget):
 
     LAND = QColor("#2f3b2f")
     SEA = QColor("#16212c")
+    min_span = (8.0, 5.0)                 # zoom maximal (degrés de longitude, de latitude)
+    hint = "Molette : zoom · glisser : déplacer · double-clic : monde"
 
     def __init__(self):
         super().__init__()
@@ -169,7 +171,7 @@ class WorldMap(QWidget):
         f = 0.8 if e.angleDelta().y() > 0 else 1.25
         lat, lon = self.to_geo(e.position().x(), e.position().y())
         lon0, lat0, w, h = self.view
-        w2, h2 = max(8.0, min(360.0, w * f)), max(5.0, min(180.0, h * f))
+        w2, h2 = max(self.min_span[0], min(360.0, w * f)), max(self.min_span[1], min(180.0, h * f))
         lon0 = lon - (lon - lon0) * w2 / w
         lat0 = lat - (lat - lat0) * h2 / h
         self.view = [lon0, lat0, w2, h2]
@@ -259,6 +261,7 @@ class WorldMap(QWidget):
         p.setBrush(Qt.NoBrush)
         p.setPen(QPen(QColor(255, 255, 255, 40), 0.7))
         p.drawPath(borders)
+        self._paint_extra(p)
         # graticule tous les 30°
         p.setPen(QPen(QColor(255, 255, 255, 22), 1, Qt.DotLine))
         for lon in range(-180, 181, 30):
@@ -317,5 +320,11 @@ class WorldMap(QWidget):
             p.setBrush(QColor("#e8412c"))
             p.drawEllipse(QPointF(x, y), 5, 5)
         p.setPen(QColor(200, 200, 200, 150))
-        p.drawText(QRectF(4, self.height() - 16, self.width() - 8, 14), Qt.AlignRight,
-                   "Molette : zoom · glisser : déplacer · double-clic : monde")
+        p.drawText(QRectF(4, self.height() - 16, self.width() - 8, 14), Qt.AlignRight, self.hint)
+        self._paint_top(p)
+
+    def _paint_extra(self, p):
+        """Couche supplémentaire dessinée sur le fond de carte (sous les points)."""
+
+    def _paint_top(self, p):
+        """Couche supplémentaire dessinée par-dessus tout."""

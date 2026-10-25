@@ -2037,6 +2037,9 @@ class MainWindow(QMainWindow):
         self.b_loc.setToolTip(f"{loc} — {lat:.4f}°, {lon:.4f}° ({source}). Clic : régler")
         if getattr(self, "mapdock", None):
             self.mapdock.update_layers()
+        if getattr(self, "logdock", None) and loc != getattr(self, "_map_loc", None):
+            self._map_loc = loc                     # la carte du QSO suit le locator, pas chaque point GPS
+            self.logdock.refresh_map()
 
     def load_position(self):
         self.station, self.station_src = None, ""

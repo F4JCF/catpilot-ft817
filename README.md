@@ -95,6 +95,19 @@ ligne **DTR ou RTS** d'une interface reliée à la prise KEY (Digirig, interface
 série…). Vitesse réglée dans le panneau. Messages programmables F1 à F5 et CQ
 automatique comme dans CAT Pilot.
 
+## Carnet : département et carte du QSO
+
+- **Département** du correspondant (France) : numéro et nom (« 38 — Isère »),
+  trouvé d'après son code postal (QRZ.com, HamQTH) ou à défaut son locator
+  (6 caractères) ; DOM d'après le préfixe (FG, FM, FY, FR, FH). Modifiable à la
+  main ; enregistré dans le carnet (champ ADIF STATE) et affiché dans la colonne
+  Pays.
+- **Carte du QSO** à droite de la fiche : ma station, le correspondant, le
+  trajet entre les deux locators, distance et cap, département du correspondant
+  en surbrillance. Molette : zoom ; double-clic : recadrer.
+- Contours des départements : IGN Admin Express (Licence ouverte Etalab), via
+  le projet france-geojson.
+
 ## Partager le CAT avec WSJT-X
 
 Cocher « Serveur rigctld » (port **4534**). Dans WSJT-X : Radio « Hamlib NET

@@ -991,9 +991,12 @@ class MainWindow(QMainWindow):
             if getattr(cls, "is_remote", False):
                 QMessageBox.critical(self, "Connexion impossible", f"La station {port} n'a pas pu être jointe.\n\n{e}")
                 return
+            hint = "Vérifiez qu'aucun autre logiciel ne l'utilise déjà."
+            if sys.platform.startswith("linux") and (isinstance(e, PermissionError) or "ermission" in str(e)):
+                hint = ("Sous Linux, votre compte doit faire partie du groupe « dialout » (« uucp » sur Arch) :\n"
+                        "sudo usermod -aG dialout $USER\npuis fermez la session et reconnectez-vous.")
             QMessageBox.critical(self, "Connexion impossible",
-                                 f"Le port {port} n'a pas pu être ouvert.\n\n{e}\n\n"
-                                 "Vérifiez qu'aucun autre logiciel ne l'utilise déjà.")
+                                 f"Le port {port} n'a pas pu être ouvert.\n\n{e}\n\n" + hint)
 
     def on_status(self, ok, msg):
         lost = not ok and msg.startswith("Liaison perdue")
@@ -1118,6 +1121,12 @@ class MainWindow(QMainWindow):
     def refresh_audio(self, wanted=None):
         self.cb_audio.clear()
         inputs = list_inputs()
+        from . import waterfall
+        if waterfall.sd is None and sys.platform.startswith("linux"):
+            self.cb_audio.setToolTip("Audio indisponible : installez la bibliothèque PortAudio "
+                                     "(paquet libportaudio2, ou portaudio sur Fedora/Arch), puis relancez.")
+            QTimer.singleShot(3000, lambda: self.statusBar().showMessage(
+                "Audio indisponible : installez le paquet libportaudio2 (PortAudio), puis relancez le logiciel", 20000))
         for dev, label in inputs:
             self.cb_audio.addItem(label, dev)
         i = self.cb_audio.findText(wanted) if wanted else -1
@@ -2211,8 +2220,8 @@ class MainWindow(QMainWindow):
         box.setInformativeText((notes + "\n\n" if notes else "") +
                                ("Le logiciel sera fermé, mis à jour puis relancé automatiquement."
                                 if can_self_update() else
-                                "Mise à jour automatique possible uniquement avec CATPilot-FT817.exe : "
-                                "la page de téléchargement va s'ouvrir."))
+                                "Mise à jour automatique impossible ici (lancé depuis les sources, ou dossier "
+                                "du programme protégé en écriture) : la page de téléchargement va s'ouvrir."))
         b_now = box.addButton("Mettre à jour maintenant", QMessageBox.AcceptRole)
         b_later = box.addButton("Plus tard", QMessageBox.RejectRole)
         b_skip = box.addButton("Ignorer cette version", QMessageBox.DestructiveRole) if not manual else None

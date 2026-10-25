@@ -23,7 +23,8 @@ from . import __version__
 REPO = "F4JCF/catpilot-ft817"
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PAGE = f"https://github.com/{REPO}/releases/latest"
-ASSET = "CATPilot-FT817.exe"
+# fichier publié pour chaque système (même version, même page de publication)
+ASSET = "CATPilot-FT817.exe" if sys.platform == "win32" else "CATPilot-FT817-linux-x86_64"
 HEADERS = {"User-Agent": f"CATPilot/{__version__}", "Accept": "application/vnd.github+json"}
 
 
@@ -36,8 +37,13 @@ def is_newer(remote, local=__version__):
 
 
 def can_self_update():
-    """Remplacement automatique possible seulement pour l'exécutable Windows."""
-    return getattr(sys, "frozen", False) and sys.platform == "win32"
+    """Remplacement automatique possible pour l'exécutable Windows ou Linux (pas depuis les sources).
+    Sous Linux, il faut aussi pouvoir écrire dans le dossier de l'exécutable (~/.local/bin en général)."""
+    if not getattr(sys, "frozen", False):
+        return False
+    if sys.platform == "win32":
+        return True
+    return sys.platform.startswith("linux") and os.access(os.path.dirname(sys.executable), os.W_OK)
 
 
 class Updater(QObject):
@@ -82,7 +88,8 @@ class Updater(QObject):
 
     def _download(self, info):
         try:
-            dest = os.path.join(tempfile.gettempdir(), f"CATPilot-FT817_{info['version']}.exe")
+            dest = os.path.join(tempfile.gettempdir(), f"CATPilot-FT817_{info['version']}"
+                                + (".exe" if sys.platform == "win32" else ""))
             req = urllib.request.Request(info["url"], headers={"User-Agent": HEADERS["User-Agent"]})
             h = hashlib.sha256()
             with urllib.request.urlopen(req, timeout=30) as r, open(dest, "wb") as f:
@@ -131,9 +138,17 @@ def spawn_detached(cmd):
         subprocess.Popen(cmd, env=clean_env(), creationflags=base, close_fds=True)
 
 
+def _linux_relaunch(exe):
+    """Linux : attend la fin de ce processus puis relance l'exécutable."""
+    sh = f'while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.5; done; sleep 1; exec "{exe}"'
+    spawn_detached(["/bin/sh", "-c", sh])
+
+
 def restart():
     """Relance le logiciel (après un changement de langue, par exemple)."""
-    if getattr(sys, "frozen", False):
+    if getattr(sys, "frozen", False) and sys.platform != "win32":
+        _linux_relaunch(sys.executable)
+    elif getattr(sys, "frozen", False):
         exe = sys.executable
         bat = os.path.join(tempfile.gettempdir(), "catpilot_relance.bat")
         with open(bat, "w", encoding="mbcs" if sys.platform == "win32" else "utf-8") as f:
@@ -157,6 +172,19 @@ def _wait_lines():
 def install_and_restart(new_exe):
     """Lance le script qui attend la fermeture, remplace l'exécutable et le relance."""
     exe = sys.executable
+    if sys.platform != "win32":
+        # Linux : un exécutable en cours d'utilisation peut être remplacé (renommage atomique)
+        import shutil
+        tmp = exe + ".nouveau"
+        shutil.copyfile(new_exe, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, exe)
+        try:
+            os.remove(new_exe)
+        except OSError:
+            pass
+        _linux_relaunch(exe)
+        return
     bat = os.path.join(tempfile.gettempdir(), "catpilot_maj.bat")
     with open(bat, "w", encoding="mbcs" if sys.platform == "win32" else "utf-8") as f:
         f.write(_wait_lines() + f"""set essai=0

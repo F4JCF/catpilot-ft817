@@ -1,0 +1,122 @@
+name: Construire les exécutables Windows et Linux
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      - name: Bibliothèque FT8 (ft8_lib)
+        shell: bash
+        run: |
+          set +e
+          which gcc || echo "::warning::gcc absent du PATH"
+          gcc --version 2>&1 | head -1 | sed 's/^/::notice::/'
+          python native/build_ft8.py > build_ft8.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ] || [ ! -f catpilot/ft8lib.dll ]; then
+            grep -iE "error|erreur|undefined|cannot" build_ft8.log | head -20 | sed 's/^/::error::/'
+            tail -5 build_ft8.log | sed 's/^/::error::/'
+            exit 1
+          fi
+          python -c "import ctypes; ctypes.CDLL(r'catpilot/ft8lib.dll')" || { echo "::error::ft8lib.dll ne se charge pas"; exit 1; }
+      - run: pyinstaller --noconfirm --onefile --windowed --name CATPilot-FT817 --icon assets/catpilot.ico --add-data "assets;assets" --add-binary "catpilot/ft8lib.dll;." --collect-all pyrtlsdrlib --collect-all sstv --hidden-import PySide6.QtTextToSpeech run.py
+      - name: Auto-test de l'exécutable Windows (FT8, FT4, PSK31, RTTY, SSTV)
+        shell: bash
+        run: |
+          ./dist/CATPilot-FT817.exe --selftest selftest.txt &
+          for i in $(seq 1 90); do [ -f selftest.txt ] && break; sleep 1; done
+          sleep 2
+          if [ ! -f selftest.txt ]; then echo "::error::l'auto-test n'a rien produit"; exit 1; fi
+          sed 's/^/::notice::/' selftest.txt | grep -v "^::notice::\s" | head -20
+          if grep -q "ÉCHEC" selftest.txt; then grep -A3 "ÉCHEC" selftest.txt | sed 's/^/::error::/'; exit 1; fi
+      - name: Version
+        id: ver
+        shell: bash
+        run: echo "v=$(python -c "import re;print(re.search(r'\"(.+?)\"', open('catpilot/__init__.py').read()).group(1))")" >> "$GITHUB_OUTPUT"
+      - name: Installateur
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup -y --no-progress }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DMyVersion=${{ steps.ver.outputs.v }}" installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CATPilot-FT817-windows
+          path: |
+            dist/CATPilot-FT817.exe
+            dist/CATPilot-FT817-Setup-*.exe
+
+  # Linux : compilé sur Ubuntu 22.04 (bibliothèque C assez ancienne pour la plupart des distributions récentes)
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Paquets système (Qt xcb, PortAudio)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libegl1 libportaudio2
+      - run: pip install -r requirements.txt pyinstaller
+      - name: Bibliothèque FT8 (ft8_lib)
+        run: |
+          python native/build_ft8.py
+          python -c "import ctypes; ctypes.CDLL('catpilot/libft8lib.so')"
+      - run: pyinstaller --noconfirm --onefile --windowed --name CATPilot-FT817-linux-x86_64 --add-data "assets:assets" --add-binary "catpilot/libft8lib.so:." --collect-all pyrtlsdrlib --collect-all sstv --hidden-import PySide6.QtTextToSpeech run.py
+      - name: Auto-test de l'exécutable Linux (FT8, FT4, PSK31, RTTY, SSTV)
+        run: |
+          QT_QPA_PLATFORM=offscreen timeout 120 ./dist/CATPilot-FT817-linux-x86_64 --selftest selftest.txt || true
+          if [ ! -f selftest.txt ]; then echo "::error::l'auto-test n'a rien produit"; exit 1; fi
+          sed 's/^/::notice::/' selftest.txt | grep -v "^::notice::\s" | head -20
+          if grep -q "ÉCHEC" selftest.txt; then grep -A3 "ÉCHEC" selftest.txt | sed 's/^/::error::/'; exit 1; fi
+      - name: Archive d'installation
+        run: |
+          mkdir -p pkg/CATPilot-FT817
+          cp dist/CATPilot-FT817-linux-x86_64 packaging/linux/install.sh packaging/linux/catpilot-ft817.png \
+             packaging/linux/LISEZMOI.txt LICENSE pkg/CATPilot-FT817/
+          chmod +x pkg/CATPilot-FT817/install.sh pkg/CATPilot-FT817/CATPilot-FT817-linux-x86_64
+          tar -C pkg -czf dist/CATPilot-FT817-linux-x86_64.tar.gz CATPilot-FT817
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CATPilot-FT817-linux
+          path: |
+            dist/CATPilot-FT817-linux-x86_64
+            dist/CATPilot-FT817-linux-x86_64.tar.gz
+
+  # Publie une « Release » vX.Y.Z quand le numéro de version change :
+  # c'est elle que le menu « Mise à jour » du logiciel consulte (Windows et Linux).
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publier la version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER=$(python3 -c "import re;print(re.search(r'\"(.+?)\"', open('catpilot/__init__.py').read()).group(1))")
+          ls -la out
+          if gh release view "v$VER" > /dev/null 2>&1; then
+            echo "La version v$VER est déjà publiée"
+          else
+            gh release create "v$VER" out/CATPilot-FT817.exe out/CATPilot-FT817-Setup-$VER.exe \
+              out/CATPilot-FT817-linux-x86_64 out/CATPilot-FT817-linux-x86_64.tar.gz \
+              --title "CAT Pilot FT-817 $VER" --notes-file NOTES.md
+          fi

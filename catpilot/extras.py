@@ -54,6 +54,15 @@ class Speaker:
                                  creationflags=0x08000000)
             except Exception:
                 pass
+        else:                                   # Linux : speech-dispatcher ou espeak-ng s'ils sont installés
+            import shutil
+            for cmd in (["spd-say", "-l", "fr", text], ["espeak-ng", "-v", "fr", text], ["espeak", "-v", "fr", text]):
+                if shutil.which(cmd[0]):
+                    try:
+                        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except Exception:
+                        pass
+                    break
 
 
 def spoken_freq(hz):

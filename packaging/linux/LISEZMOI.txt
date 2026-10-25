@@ -1,0 +1,15 @@
+CAT Pilot FT-817 pour Linux (64 bits, Ubuntu 22.04 / Debian 12 / Mint 21 / Fedora 36 ou plus récents)
+
+Installation : ouvrez un terminal dans ce dossier puis tapez
+
+    ./install.sh
+
+Le logiciel s'installe pour votre compte (sans droits administrateur) dans ~/.local/bin, avec une
+entrée « CAT Pilot FT-817 » dans le menu des applications. Le script propose ensuite, si besoin :
+- d'ajouter votre compte au groupe « dialout » (accès au câble CAT) ;
+- d'installer la bibliothèque audio PortAudio (chute d'eau, FT8, messages vocaux).
+
+Port série : les câbles CAT apparaissent sous la forme /dev/ttyUSB0, /dev/ttyACM0…
+
+Mises à jour : automatiques depuis le menu « Mise à jour » du logiciel.
+Désinstallation : ./install.sh --desinstaller

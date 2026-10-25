@@ -1,6 +1,6 @@
 # CAT Pilot FT-817 — Yaesu FT-817, FT-818, FT-857, FT-897
 
-Logiciel Windows de pilotage CAT des Yaesu **FT-817, FT-818, FT-857 et FT-897**,
+Logiciel Windows et Linux de pilotage CAT des Yaesu **FT-817, FT-818, FT-857 et FT-897**,
 avec partage du CAT vers WSJT-X, JTDX, Log4OM, N1MM… grâce à un serveur
 compatible rigctld.
 
@@ -16,6 +16,21 @@ plus bas).
   pour l'utilisateur, sans droits d'administrateur.
 - **Sans installation** : `CATPilot-FT817.exe` de la même page, à lancer tel quel.
 - Ensuite, les mises à jour se font depuis le logiciel (menu « Mise à jour »).
+
+### Linux
+
+- Télécharger `CATPilot-FT817-linux-x86_64.tar.gz` sur la même page, le
+  décompresser, puis dans un terminal ouvert dans ce dossier : `./install.sh`
+- Installation pour l'utilisateur (dans `~/.local/bin`), avec une entrée
+  « CAT Pilot FT-817 » dans le menu des applications. Aucun Python à installer.
+- Le script propose d'ajouter votre compte au groupe `dialout` (accès au câble
+  CAT ; fermer puis rouvrir la session ensuite) et d'installer PortAudio
+  (`libportaudio2`), nécessaire à l'audio (chute d'eau, FT8, messages vocaux).
+- Le câble CAT apparaît comme `/dev/ttyUSB0` (ou `/dev/ttyACM0`).
+- Distributions 64 bits récentes : Ubuntu 22.04, Debian 12, Linux Mint 21,
+  Fedora 36 ou plus récentes.
+- Mises à jour automatiques comme sous Windows ; désinstallation :
+  `./install.sh --desinstaller`.
 
 ## Réglage du poste
 

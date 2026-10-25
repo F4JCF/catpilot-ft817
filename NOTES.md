@@ -1,3 +1,5 @@
-Nouveautés de la 1.2.0 :
-- Carnet : département du correspondant (numéro et nom, ex. « 38 — Isère »), trouvé d'après son code postal (QRZ.com, HamQTH) ou son locator ; DOM d'après le préfixe. Modifiable à la main ; enregistré dans le carnet (champ ADIF STATE) et affiché dans la colonne Pays.
-- Carnet : carte du QSO à côté de la fiche, avec ma station, le correspondant, le trajet entre les deux locators, la distance, le cap, et son département en surbrillance.
+Nouveautés de la 1.3.0 :
+- Matériel par indicatif (bouton « Matériel… » du carnet, à côté de « Je trafique en ») : poste, antenne, puissance et locator pour chaque indicatif (ex. F4JCF = FT-991A, F4JCF/P = FT-817).
+- En changeant d'indicatif : le locator de la station suit (position habituelle si aucun), et si le poste fait partie de ceux que le logiciel pilote, il est choisi dans « Liaison » (confirmation si un autre poste est connecté).
+- Chaque QSO note le matériel utilisé (ADIF MY_RIG, MY_ANTENNA, TX_PWR, MY_GRIDSQUARE).
+- Port, vitesse et bits de stop mémorisés pour chaque poste.

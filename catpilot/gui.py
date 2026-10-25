@@ -862,6 +862,10 @@ class MainWindow(QMainWindow):
         self.refresh_profiles()
         if self.ck_auto.isChecked():
             QTimer.singleShot(400, self.auto_connect)
+        from .logbook import station_of
+        loc = station_of(s, s.value("mycall", "")).get("locator", "")
+        if loc:                                  # indicatif /P avec son propre locator
+            QTimer.singleShot(800, lambda: self.set_station(*from_locator(loc), f"locator de {s.value('mycall', '')}"))
         self.sl_contrast.setValue(int(s.value("wf_contrast", 45)))
         self.sl_level.setValue(int(s.value("wf_level", 5)))
 
@@ -950,8 +954,13 @@ class MainWindow(QMainWindow):
         if not cls:
             return
         if not keep_saved:
-            self.cb_baud.setCurrentText(str(cls.default_baud))
-            self.cb_stop.setCurrentText(str(cls.default_stopbits))
+            saved = self.settings.value(f"rig_link/{name}", "")
+            port, baud, stop = (saved.split("|") + ["", "", ""])[:3] if saved else ("", "", "")
+            self.cb_baud.setCurrentText(baud or str(cls.default_baud))
+            self.cb_stop.setCurrentText(stop or str(cls.default_stopbits))
+            i = self.cb_port.findData(port) if port else -1
+            if i >= 0:
+                self.cb_port.setCurrentIndex(i)
         serial_rig = cls is not SimDriver and not getattr(cls, "is_remote", False)
         for w in (self.cb_port, self.cb_baud, self.cb_stop):
             w.setEnabled(serial_rig)
@@ -1006,6 +1015,9 @@ class MainWindow(QMainWindow):
                                  f"Le port {port} n'a pas pu être ouvert.\n\n{e}\n\n" + hint)
 
     def on_status(self, ok, msg):
+        if ok and self.cb_port.currentData():
+            self.settings.setValue(f"rig_link/{self.cb_rig.currentText()}", "|".join(
+                (self.cb_port.currentData(), self.cb_baud.currentText(), self.cb_stop.currentText())))
         lost = not ok and msg.startswith("Liaison perdue")
         if not ok and self.ctrl.driver:          # liaison perdue : on libère le port
             self.ctrl.disconnect_rig()
@@ -1918,6 +1930,36 @@ class MainWindow(QMainWindow):
         self.cw.ed_mycall.setText(call)
         self.logdock.fill_mycalls()
         self.statusBar().showMessage(f"Prochains QSO enregistrés avec l'indicatif {call}", 8000)
+        self.apply_call_station(call)
+
+    def apply_call_station(self, call):
+        """Applique le matériel associé à l'indicatif : locator, et poste piloté s'il est connu du logiciel."""
+        from .logbook import describe_station, station_of
+        stn = station_of(self.settings, call)
+        loc = stn.get("locator", "")
+        try:
+            if loc:
+                self.set_station(*from_locator(loc), f"locator de {call}")
+            elif "locator de" in getattr(self, "station_src", ""):
+                self.load_position()                    # retour à la position habituelle
+        except ValueError:
+            pass
+        rig = stn.get("rig", "")
+        if rig in DRIVERS and rig != self.cb_rig.currentText():
+            if self.ctrl.connected:
+                if QMessageBox.question(self, "Changer de poste",
+                                        f"L'indicatif {call} est associé au {rig}.\n\n"
+                                        f"Déconnecter le {self.cb_rig.currentText()} et connecter le {rig} ?") \
+                        != QMessageBox.Yes:
+                    return
+                self.ctrl.disconnect_rig()
+                self.cb_rig.setCurrentText(rig)
+                if self.cb_port.currentData():
+                    QTimer.singleShot(300, self.toggle_connection)
+            else:
+                self.cb_rig.setCurrentText(rig)
+        if stn:
+            self.statusBar().showMessage(f"Indicatif {call} : {describe_station(stn)}", 10000)
 
     def remove_call(self, call):
         import json

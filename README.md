@@ -108,6 +108,22 @@ automatique comme dans CAT Pilot.
 - Contours des départements : IGN Admin Express (Licence ouverte Etalab), via
   le projet france-geojson.
 
+## Plusieurs indicatifs, chacun son matériel
+
+Dans le carnet, « Je trafique en » garde la liste de vos indicatifs (F4JCF,
+F4JCF/P, FR/F4JCF/P… : taper le nouvel indicatif puis Entrée). Le bouton
+**Matériel…** associe à l'indicatif choisi un poste, une antenne, une puissance
+et, si besoin, un locator (pour un /P).
+
+- Exemple : F4JCF = FT-991A, 100 W, verticale ; F4JCF/P = FT-817, 5 W, EFHW,
+  JN33KN.
+- En passant d'un indicatif à l'autre, le locator de la station suit, et si le
+  poste est l'un de ceux que ce logiciel pilote, il est choisi dans « Liaison »
+  avec le port et la vitesse utilisés la dernière fois.
+- Chaque QSO enregistre le matériel (ADIF MY_RIG, MY_ANTENNA, TX_PWR,
+  MY_GRIDSQUARE) ; la puissance sert aussi quand le poste ne la donne pas par
+  le CAT (cas des FT-817/857/897).
+
 ## Partager le CAT avec WSJT-X
 
 Cocher « Serveur rigctld » (port **4534**). Dans WSJT-X : Radio « Hamlib NET

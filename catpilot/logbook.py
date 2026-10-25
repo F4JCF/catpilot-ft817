@@ -20,7 +20,7 @@ from . import __version__, adif, departements
 
 FIELDS = ["call", "qso_date", "time_on", "freq", "band", "mode", "submode", "rst_sent", "rst_rcvd",
           "name", "qth", "gridsquare", "sig", "sig_info", "my_sig", "my_sig_info", "comment",
-          "tx_pwr", "my_gridsquare", "station_callsign", "operator", "country", "state",
+          "tx_pwr", "my_gridsquare", "station_callsign", "operator", "country", "state", "my_rig", "my_antenna",
           "contest_id", "stx", "srx", "stx_string", "srx_string",
           "qsl_via", "eqsl_qsl_rcvd", "eqsl_qslrdate", "lotw_qsl_rcvd", "lotw_qslrdate",
           "qsl_sent", "qsl_rcvd", "qsl_sent_via", "qslsdate", "qslrdate"]
@@ -427,6 +427,104 @@ def my_calls(s):
     return calls
 
 
+KNOWN_RIGS = ["Yaesu FT-991A", "Yaesu FT-891", "Yaesu FT-817", "Yaesu FT-818", "Yaesu FT-857", "Yaesu FT-897",
+              "Yaesu FT-710", "Yaesu FTDX10", "Yaesu FT-5000", "Icom IC-705", "Icom IC-7300", "Icom IC-9700",
+              "Kenwood TS-590", "Elecraft KX3", "Xiegu G90", "Xiegu X6100"]
+
+
+def stations(s):
+    """Matériel associé à chaque indicatif : {indicatif: {rig, antenna, power, locator}}."""
+    import json
+    try:
+        d = json.loads(s.value("call_stations", "{}") or "{}")
+        return d if isinstance(d, dict) else {}
+    except ValueError:
+        return {}
+
+
+def station_of(s, call):
+    return stations(s).get((call or "").upper(), {})
+
+
+def save_station(s, call, info):
+    import json
+    d = stations(s)
+    info = {k: v.strip() for k, v in info.items() if isinstance(v, str) and v.strip()}
+    if info:
+        d[call.upper()] = info
+    else:
+        d.pop(call.upper(), None)
+    s.setValue("call_stations", json.dumps(d, ensure_ascii=False))
+
+
+def describe_station(st):
+    return " · ".join(x for x in (st.get("rig", ""), (st.get("power", "") + " W") if st.get("power") else "",
+                                  st.get("antenna", ""), st.get("locator", "")) if x)
+
+
+class StationDialog(QDialog):
+    """Matériel utilisé avec un indicatif (F4JCF = FT-991A, F4JCF/P = FT-817…)."""
+
+    def __init__(self, parent, call, info, drivers=()):
+        super().__init__(parent)
+        self.setWindowTitle(f"Matériel de {call}")
+        self.setMinimumWidth(480)
+        v = QVBoxLayout(self)
+        t = QLabel(f"Matériel utilisé quand vous trafiquez en <b>{call}</b>. Il est noté dans chaque QSO "
+                   "(champs ADIF MY_RIG, MY_ANTENNA, TX_PWR, MY_GRIDSQUARE).")
+        t.setWordWrap(True)
+        v.addWidget(t)
+        f = QFormLayout()
+        self.cb_rig = QComboBox()
+        self.cb_rig.setEditable(True)
+        self.cb_rig.addItems([""] + list(dict.fromkeys(list(drivers) + KNOWN_RIGS)))
+        self.cb_rig.setCurrentText(info.get("rig", ""))
+        f.addRow("Poste", self.cb_rig)
+        self.ed_ant = QLineEdit(info.get("antenna", ""))
+        self.ed_ant.setPlaceholderText("ex. EFHW 40-10 m, verticale X50…")
+        f.addRow("Antenne", self.ed_ant)
+        self.ed_pwr = QLineEdit(info.get("power", ""))
+        self.ed_pwr.setPlaceholderText("en watts, ex. 5")
+        f.addRow("Puissance (W)", self.ed_pwr)
+        self.ed_loc = QLineEdit(info.get("locator", ""))
+        self.ed_loc.setPlaceholderText("vide = position habituelle de la station")
+        f.addRow("Locator", self.ed_loc)
+        for wd in (self.cb_rig, self.ed_ant, self.ed_pwr, self.ed_loc):
+            wd.setMinimumHeight(28)
+        v.addLayout(f)
+        self.lb = QLabel("")
+        self.lb.setObjectName("hint")
+        self.lb.setWordWrap(True)
+        if drivers:
+            self.lb.setText("Si ce poste fait partie de ceux que le logiciel pilote, il est choisi automatiquement "
+                            "dans « Liaison » quand vous passez sur cet indicatif (avec son port et sa vitesse).")
+        v.addWidget(self.lb)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._ok)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _ok(self):
+        loc = self.ed_loc.text().strip()
+        if loc:
+            from .geo import from_locator
+            try:
+                from_locator(loc)
+            except ValueError:
+                self.lb.setText("Locator invalide (4, 6 ou 8 caractères, ex. JN33LP)")
+                return
+        pwr = self.ed_pwr.text().strip().replace(",", ".")
+        if pwr:
+            try:
+                float(pwr)
+            except ValueError:
+                self.lb.setText("Puissance invalide : un nombre de watts, ex. 5")
+                return
+        self.result_info = {"rig": self.cb_rig.currentText(), "antenna": self.ed_ant.text(),
+                            "power": pwr, "locator": loc[:2].upper() + loc[2:4] + loc[4:].lower() if loc else ""}
+        self.accept()
+
+
 def describe_mycall(call):
     """« portable, depuis La Réunion » : ce que veut dire l'indicatif choisi."""
     if not call:
@@ -645,6 +743,11 @@ class LogDock(QDockWidget):
         b = QPushButton("Retirer")
         b.setToolTip("Retirer cet indicatif de la liste")
         b.clicked.connect(lambda: self.win.remove_call(self.cb_mycall.currentText()))
+        hm.addWidget(b)
+        b = QPushButton("Matériel…")
+        b.setToolTip("Poste, antenne, puissance et locator utilisés avec cet indicatif\n"
+                     "(ex. F4JCF = FT-991A, F4JCF/P = FT-817)")
+        b.clicked.connect(self.edit_station)
         hm.addWidget(b)
         self.lb_mycall = QLabel("")
         self.lb_mycall.setObjectName("hint")
@@ -931,7 +1034,23 @@ class LogDock(QDockWidget):
         self.cb_mycall.setCurrentText(cur)
         self.cb_mycall.blockSignals(False)
         if hasattr(self, "lb_mycall"):
-            self.lb_mycall.setText(describe_mycall(cur))
+            desc = " · ".join(x for x in (describe_mycall(cur), describe_station(station_of(s, cur))) if x)
+            self.lb_mycall.setText(desc)
+
+    def edit_station(self):
+        call = (self.cb_mycall.currentText() or "").strip().upper()
+        if not call:
+            return
+        from .drivers import DRIVERS
+        drivers = [n for n, c in DRIVERS.items() if not getattr(c, "is_remote", False) and not n.startswith("Simul")]
+        d = StationDialog(self, call, station_of(self.win.settings, call), drivers)
+        if d.exec():
+            save_station(self.win.settings, call, d.result_info)
+            if call not in my_calls(self.win.settings):
+                self.win.set_active_call(call)
+            elif call == (self.win.settings.value("mycall", "") or "").upper():
+                self.win.apply_call_station(call)
+            self.fill_mycalls()
 
     def _sig_changed(self, text, ed, who):
         on = text not in ("", "Aucune")
@@ -1142,9 +1261,14 @@ class LogDock(QDockWidget):
                "name": self.ed_name.text(), "qth": self.ed_qth.text(), "gridsquare": self.ed_grid.text(),
                "comment": self.ed_comment.text(), "qsl_via": self._qsl_via, "country": self._country,
                "state": departements.normalize(self.ed_dept.text()),
-               "tx_pwr": str(st.p.get("pwr", "")) if st else "",
+               "tx_pwr": str(st.p.get("pwr", "")) if st and st.p.get("pwr") else "",
                "station_callsign": self.win.settings.value("mycall", "").upper(),
                "my_gridsquare": self.win.b_loc.text().split()[0] if getattr(self.win, "station", None) else ""}
+        stn = station_of(self.win.settings, rec["station_callsign"])
+        rec["my_rig"] = stn.get("rig", "") or (self.ctrl.driver.name if self.ctrl.connected and self.ctrl.driver else "")
+        rec["my_antenna"] = stn.get("antenna", "")
+        if not rec["tx_pwr"]:
+            rec["tx_pwr"] = stn.get("power", "")
         if ref and self.cb_sig.currentIndex() > 0:
             rec["sig"], rec["sig_info"] = sig(self.cb_sig, ref), ref
         if myref and self.cb_mysig.currentIndex() > 0:

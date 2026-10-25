@@ -11,7 +11,7 @@ import serial.tools.list_ports
 from PySide6.QtCore import QByteArray, QPointF, QRectF, QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
-    QProxyStyle, QStyle,
+    QMenuBar,
     QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
     QPushButton, QSizePolicy, QSlider, QSpinBox, QToolBar, QVBoxLayout, QWidget,
@@ -104,35 +104,42 @@ def apply_theme(app, name="jour", scale=1.0):
     AMBER, GREEN, RED, TEXT = c["amber"], c["green"], c["red"], c["text"]
     ARC_OK, NEEDLE, METER_BG = c["arc_ok"], c["needle"], c["panel"]
     app.setStyleSheet(make_style(name, scale))
+    UpdateMenuBar.colors = c
     for w in app.allWidgets():
         w.update()
 
 
 # --- widgets ------------------------------------------------------------------
-class MenuBarStyle(QProxyStyle):
-    """Dessine en orange le titre du menu « Mise à jour » quand une version est disponible."""
-    ORANGE = QColor("#ff8c1a")
+class UpdateMenuBar(QMenuBar):
+    """Barre de menus : le titre « Mise à jour » passe en orange (gras) quand une version est disponible.
 
-    def __init__(self):
-        super().__init__()
+    Dessiné par-dessus le rendu normal, sans dépendre du style de Windows ni de la feuille de style."""
+    ORANGE = QColor("#ff8c1a")
+    colors = {"toolbar": "#0b0b0b", "btn_hover": "#555"}    # mis à jour par apply_theme
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.highlight_menu = None
 
-    def drawControl(self, element, option, painter, widget=None):
+    def paintEvent(self, e):
+        super().paintEvent(e)
         menu = self.highlight_menu
-        if element == QStyle.CE_MenuBarItem and menu is not None and option.text == menu.title():
-            painter.save()
-            r = option.rect
-            if option.state & QStyle.State_Selected:
-                painter.fillRect(r, QColor(255, 140, 26, 60))
-            f = QFont(painter.font())
-            f.setBold(True)
-            painter.setFont(f)
-            painter.setPen(self.ORANGE)
-            painter.drawText(r, Qt.AlignCenter | Qt.TextShowMnemonic, option.text)
-            painter.restore()
+        if menu is None:
             return
-        super().drawControl(element, option, painter, widget)
-
+        act = menu.menuAction()
+        r = self.actionGeometry(act)
+        if r.isEmpty():
+            return
+        p = QPainter(self)
+        active = self.activeAction() is act
+        p.fillRect(r, QColor(255, 140, 26, 70) if active else QColor(self.colors["toolbar"]))
+        f = QFont(self.font())
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(self.ORANGE)
+        from .i18n import tr
+        p.drawText(r, Qt.AlignCenter, tr(menu.title()).replace("&", ""))
+        p.end()
 
 
 class Panel(QFrame):
@@ -1231,6 +1238,7 @@ class MainWindow(QMainWindow):
         self._clock.start(1000)
         self.update_clock()
 
+        self.setMenuBar(UpdateMenuBar(self))
         mb = self.menuBar()
         m = self.menu_poste = mb.addMenu("Poste")
         self.menu_actions = []
@@ -1336,8 +1344,6 @@ class MainWindow(QMainWindow):
         self._upd_dialog = None
         self._restart_for_update = False
         self.menu_upd = mb.addMenu("Mise à jour")
-        self.mb_style = MenuBarStyle()
-        mb.setStyle(self.mb_style)
         a = QAction("Vérifier les mises à jour…", self)
         a.triggered.connect(lambda: self.upd.check(manual=True))
         self.menu_upd.addAction(a)
@@ -1349,8 +1355,13 @@ class MainWindow(QMainWindow):
         a = QAction("Voir toutes les versions sur GitHub", self)
         a.triggered.connect(self.open_releases_page)
         self.menu_upd.addAction(a)
+        self._silent_check = False
         if self.act_upd_start.isChecked():
             QTimer.singleShot(4000, lambda: self.upd.check(manual=False))
+        # vérification discrète toutes les 6 heures : « Mise à jour » passe en orange sans fenêtre
+        self._upd_timer = QTimer(self)
+        self._upd_timer.timeout.connect(self._periodic_update_check)
+        self._upd_timer.start(6 * 3600 * 1000)
 
         def sc(keys, slot):
             QShortcut(QKeySequence(keys), self, activated=slot)
@@ -2185,9 +2196,14 @@ class MainWindow(QMainWindow):
     # --- mises à jour ------------------------------------------------------------------------
     def set_update_flag(self, available, version=""):
         """Titre « Mise à jour » en orange tant qu'une nouvelle version attend."""
-        self.mb_style.highlight_menu = self.menu_upd if available else None
+        self.menuBar().highlight_menu = self.menu_upd if available else None
         self.menu_upd.menuAction().setToolTip(f"Nouvelle version disponible : {version}" if available else "")
         self.menuBar().update()
+
+    def _periodic_update_check(self):
+        if self.act_upd_start.isChecked():
+            self._silent_check = True
+            self.upd.check(manual=False)
 
     def open_releases_page(self):
         from PySide6.QtCore import QUrl
@@ -2195,6 +2211,7 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl(RELEASES_PAGE))
 
     def on_update_checked(self, info, manual):
+        silent, self._silent_check = self._silent_check, False
         if isinstance(info, Exception):
             if manual:
                 QMessageBox.warning(self, "Mise à jour",
@@ -2205,6 +2222,10 @@ class MainWindow(QMainWindow):
             if manual:
                 QMessageBox.information(self, "Mise à jour",
                                         f"Vous avez déjà la dernière version ({__version__}).")
+            return
+        if silent and not manual:
+            self.set_update_flag(True, info["version"])
+            self.statusBar().showMessage(f"Nouvelle version disponible : {info['version']} (menu « Mise à jour »)")
             return
         if not manual and self.settings.value("update_skip", "") == info["version"]:
             self.set_update_flag(True, info["version"])

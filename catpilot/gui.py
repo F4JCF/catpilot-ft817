@@ -1,0 +1,2411 @@
+"""Interface graphique de CAT Pilot FT-817 pour Yaesu FT-817, FT-818, FT-857 et FT-897."""
+import base64
+import datetime
+import json
+import math
+import os
+import sys
+import time
+
+import serial.tools.list_ports
+from PySide6.QtCore import QByteArray, QPointF, QRectF, QSettings, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtWidgets import (
+    QProxyStyle, QStyle,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
+    QPushButton, QSizePolicy, QSlider, QSpinBox, QToolBar, QVBoxLayout, QWidget,
+    QDialog, QDialogButtonBox, QRadioButton,
+)
+
+from . import __version__
+from .controller import RigController
+from .drivers import DRIVERS
+from .drivers.sim import SimDriver
+from .docks import CwDock, MenuEditor, TxAudioDock
+from .mapdock import MapDock
+from .maincourante import MainCouranteDock
+from .digidock import DigiDock
+from .memdock import MemoryDock, backup_dir
+from .propagation import FR as PROP_FR, Propagation
+from .updater import PAGE as RELEASES_PAGE, Updater, can_self_update, install_and_restart, is_newer
+from .rigctl_server import RigctlServer
+from .waterfall import Waterfall, guess_radio_input, list_inputs
+from .bandplan import BandPlanBar
+from .compact import CompactWindow
+from .geo import NmeaReader, from_locator, to_locator
+from .theme import THEMES, make_style
+from .voicekeyer import VoiceDock
+from .logbook import HamQTHDialog, Log, LogDock
+from .spots import SpotsDock, set_bands
+from .wsjtx import WsjtxDock
+from .rotor import RotorDock
+from .satellites import SatDock
+from .sdr import SdrDock
+from .remote import RemoteDock
+
+# --- données ----------------------------------------------------------------
+MODE_BUTTONS = [("USB", "USB"), ("LSB", "LSB"), ("CW", "CW"), ("CWR", "CW-R"),
+                ("AM", "AM"), ("FM", "FM"), ("RTTY", "RTTY-L"), ("RTTYR", "RTTY-U"),
+                ("PKTLSB", "DATA-L"), ("PKTUSB", "DATA-U"), ("PKTFM", "DATA-FM"),
+                ("C4FM", "C4FM")]
+MODE_LABELS = dict(MODE_BUTTONS)
+
+BANDS = [  # nom, début, fin, fréquence par défaut (Région 1)
+    ("160m", 1810000, 2000000, 1840000), ("80m", 3500000, 3800000, 3573000),
+    ("60m", 5351500, 5366500, 5357000), ("40m", 7000000, 7200000, 7074000),
+    ("30m", 10100000, 10150000, 10136000), ("20m", 14000000, 14350000, 14074000),
+    ("17m", 18068000, 18168000, 18100000), ("15m", 21000000, 21450000, 21074000),
+    ("12m", 24890000, 24990000, 24915000), ("10m", 28000000, 29700000, 28074000),
+    ("6m", 50000000, 52000000, 50313000), ("2m", 144000000, 146000000, 144174000),
+    ("70cm", 430000000, 440000000, 432174000), ("23cm", 1240000000, 1300000000, 1296174000),
+]
+STEPS = [("10 Hz", 10), ("100 Hz", 100), ("1 kHz", 1000), ("12,5 kHz", 12500), ("100 kHz", 100000)]
+
+# Largeurs de filtre (index SH) — valeurs indicatives
+WIDTH_SSB = {1: 200, 2: 400, 3: 600, 4: 850, 5: 1100, 6: 1350, 7: 1500, 8: 1650, 9: 1800,
+             10: 1950, 11: 2100, 12: 2250, 13: 2400, 14: 2500, 15: 2600, 16: 2700,
+             17: 2800, 18: 2900, 19: 3000, 20: 3200, 21: 3400}
+WIDTH_CW = {1: 50, 2: 100, 3: 150, 4: 200, 5: 250, 6: 300, 7: 350, 8: 400, 9: 450,
+            10: 500, 11: 800, 12: 1200, 13: 1400, 14: 1700, 15: 2000, 16: 2400, 17: 3000}
+CW_LIKE = ("CW", "CWR", "RTTY", "RTTYR", "PKTUSB", "PKTLSB")
+
+CTCSS = [67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0,
+         103.5, 107.2, 110.9, 114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2,
+         151.4, 156.7, 159.8, 162.2, 165.5, 167.9, 171.3, 173.8, 177.3, 179.9, 183.5,
+         186.2, 189.9, 192.8, 196.6, 199.5, 203.5, 206.5, 210.7, 218.1, 225.7, 229.1,
+         233.6, 241.8, 250.3, 254.1]
+SHIFT_LABELS = ["Simplex", "Décalage +", "Décalage −"]
+TONE_MODES = ["Sans tonalité", "TSQ (enc./déc.)", "Tonalité à l'émission", "DCS"]
+AGC_LABELS = ["AGC OFF", "AGC FAST", "AGC MID", "AGC SLOW", "AGC AUTO"]
+PRE_LABELS = ["IPO", "AMP 1", "AMP 2"]
+
+PROFILE_KEYS = ["pwr", "width", "shift", "nar", "nb", "dnr", "dnr_lvl", "dnf", "agc", "pre",
+                "att", "proc", "mic", "contour", "notch"]
+DEFAULT_PROFILES = {   # par CAT, ces postes ne règlent que la fréquence et le mode
+    "FT8 20 m": {"freq": 14074000, "mode": "PKTUSB"},
+    "FT8 40 m": {"freq": 7074000, "mode": "PKTUSB"},
+    "CW QRP 40 m": {"freq": 7030000, "mode": "CW"},
+    "BLU 40 m": {"freq": 7130000, "mode": "LSB"},
+    "BLU 20 m": {"freq": 14285000, "mode": "USB"},
+    "FM 2 m appel": {"freq": 145500000, "mode": "FM"},
+}
+
+AMBER, GREEN, RED, TEXT = "#f2b705", "#8cff3a", "#e5463b", "#e6e6e6"
+ARC_OK, NEEDLE, METER_BG = "#2fbf3a", "#ff4d2e", "#000"
+STYLE = make_style("jour", 1.0)
+set_bands(BANDS)
+
+
+def apply_theme(app, name="jour", scale=1.0):
+    """Change les couleurs de toute l'interface (feuille de style et aiguilles)."""
+    global AMBER, GREEN, RED, TEXT, ARC_OK, NEEDLE, METER_BG
+    c = THEMES.get(name, THEMES["jour"])
+    AMBER, GREEN, RED, TEXT = c["amber"], c["green"], c["red"], c["text"]
+    ARC_OK, NEEDLE, METER_BG = c["arc_ok"], c["needle"], c["panel"]
+    app.setStyleSheet(make_style(name, scale))
+    for w in app.allWidgets():
+        w.update()
+
+
+# --- widgets ------------------------------------------------------------------
+class MenuBarStyle(QProxyStyle):
+    """Dessine en orange le titre du menu « Mise à jour » quand une version est disponible."""
+    ORANGE = QColor("#ff8c1a")
+
+    def __init__(self):
+        super().__init__()
+        self.highlight_menu = None
+
+    def drawControl(self, element, option, painter, widget=None):
+        menu = self.highlight_menu
+        if element == QStyle.CE_MenuBarItem and menu is not None and option.text == menu.title():
+            painter.save()
+            r = option.rect
+            if option.state & QStyle.State_Selected:
+                painter.fillRect(r, QColor(255, 140, 26, 60))
+            f = QFont(painter.font())
+            f.setBold(True)
+            painter.setFont(f)
+            painter.setPen(self.ORANGE)
+            painter.drawText(r, Qt.AlignCenter | Qt.TextShowMnemonic, option.text)
+            painter.restore()
+            return
+        super().drawControl(element, option, painter, widget)
+
+
+
+class Panel(QFrame):
+    """Cadre noir avec titre en bas, à la manière d'une face avant."""
+
+    def __init__(self, title):
+        super().__init__()
+        self.setObjectName("panel")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 4)
+        outer.setSpacing(4)
+        self.body = QWidget()
+        self.body.setStyleSheet("background: transparent;")
+        outer.addWidget(self.body, 1)
+        t = QLabel(title)
+        t.setObjectName("ptitle")
+        t.setAlignment(Qt.AlignCenter)
+        t.setStyleSheet("background: transparent;")
+        outer.addWidget(t)
+
+
+class FreqDisplay(QLabel):
+    """Afficheur de fréquence : la molette sur un chiffre règle ce chiffre."""
+    tune = Signal(int)
+    PLACES = {0: 8, 1: 7, 2: 6, 4: 5, 5: 4, 6: 3, 8: 2, 9: 1, 10: 0}
+
+    def __init__(self, name="freq"):
+        super().__init__("  -.---.---")
+        self.setObjectName(name)
+        self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setToolTip("Molette sur un chiffre pour le régler")
+        self.default_step = 100
+        self.setMouseTracking(True)
+        self._hover = None
+
+    def _index_at(self, x):
+        txt = self.text()
+        if not txt:
+            return None
+        w = QFontMetrics(self.font()).horizontalAdvance(txt)
+        idx = int((x - (self.width() - w) / 2) // (w / len(txt)))
+        return idx if 0 <= idx < len(txt) and txt[idx].isdigit() else None
+
+    def mouseMoveEvent(self, e):
+        i = self._index_at(e.position().x())
+        if i != self._hover:
+            self._hover = i
+            self.update()
+
+    def leaveEvent(self, _e):
+        self._hover = None
+        self.update()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self._hover is None:
+            return
+        txt = self.text()
+        fm = QFontMetrics(self.font())
+        w = fm.horizontalAdvance(txt)
+        cw = w / len(txt)
+        x0 = (self.width() - w) / 2 + self._hover * cw
+        p = QPainter(self)
+        c = QColor(GREEN)
+        c.setAlpha(200)
+        p.setPen(QPen(c, 3))
+        y = (self.height() + fm.ascent()) / 2 + 4
+        p.drawLine(int(x0 + 2), int(y), int(x0 + cw - 2), int(y))
+        p.end()
+
+    def set_freq(self, hz):
+        mhz, rest = divmod(int(hz), 1_000_000)
+        khz, h = divmod(rest, 1000)
+        self.setText(f"{mhz:>3}.{khz:03}.{h:03}")
+
+    def _step_at(self, x):
+        txt = self.text()
+        w = QFontMetrics(self.font()).horizontalAdvance(txt)
+        idx = int((x - (self.width() - w) / 2) // (w / len(txt)))
+        if not 0 <= idx < len(txt) or not txt[idx].isdigit() and txt[idx] != " ":
+            return None
+        return 10 ** sum(1 for c in txt[idx + 1:] if c.isdigit())
+
+    def wheelEvent(self, e):
+        n = e.angleDelta().y() // 120
+        if n:
+            self.tune.emit(n * (self._step_at(e.position().x()) or self.default_step))
+
+
+class AnalogMeter(QWidget):
+    """Galvanomètre à aiguille dessiné en vectoriel."""
+
+    def __init__(self, title, scale, red_from):
+        super().__init__()
+        self.set_scale(title, scale, red_from)
+        self.value = self.target = 0.0
+        self.setMinimumSize(QSize(250, 118))
+        t = QTimer(self)
+        t.timeout.connect(self._animate)
+        t.start(30)
+
+    def set_scale(self, title, scale, red_from):
+        self.title, self.scale, self.red_from = title, scale, red_from
+        self.update()
+
+    def set_value(self, frac):
+        self.target = max(0.0, min(1.0, frac))
+
+    def _animate(self):
+        d = self.target - self.value
+        if abs(d) > 0.002:
+            self.value += d * 0.35
+            self.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(self.rect(), QColor(METER_BG))
+        cx, cy, r = w / 2, h * 1.45, h * 1.18
+        a0, a1 = 132, 48
+
+        def ang(f):
+            return math.radians(a0 - (a0 - a1) * f)
+
+        def pt(f, rr):
+            return QPointF(cx + rr * math.cos(ang(f)), cy - rr * math.sin(ang(f)))
+
+        rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
+        ar = a0 - (a0 - a1) * self.red_from
+        p.setPen(QPen(QColor(ARC_OK), 4, Qt.SolidLine, Qt.FlatCap))
+        p.drawArc(rect, int(ar * 16), int((a0 - ar) * 16))
+        p.setPen(QPen(QColor(RED), 4, Qt.SolidLine, Qt.FlatCap))
+        p.drawArc(rect, int(a1 * 16), int((ar - a1) * 16))
+        p.setPen(QPen(QColor(TEXT), 1.3))
+        for i in range(31):
+            f = i / 30
+            p.drawLine(pt(f, r + 3), pt(f, r + (10 if i % 5 == 0 else 6)))
+        font = QFont()
+        font.setPointSize(8)
+        font.setBold(True)
+        p.setFont(font)
+        for f, label in self.scale:
+            p.setPen(QColor(RED if f > self.red_from + 1e-6 else TEXT))
+            q = pt(f, r + 21)
+            p.drawText(QRectF(q.x() - 22, q.y() - 8, 44, 16), Qt.AlignCenter, label)
+        p.setPen(QPen(QColor(NEEDLE), 2.2, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(pt(self.value, r * 0.72), pt(self.value, r + 12))
+        p.setPen(QColor(AMBER))
+        p.drawText(QRectF(0, h - 20, w, 18), Qt.AlignCenter, self.title)
+
+
+S_SCALE = [(12 / 255, "1"), (40 / 255, "3"), (65 / 255, "5"), (95 / 255, "7"),
+           (130 / 255, "9"), (172 / 255, "+20"), (220 / 255, "+40"), (1.0, "+60")]
+PO_SCALE = [(0, "0"), (0.25, "25"), (0.5, "50"), (0.75, "75"), (1.0, "100 %")]
+SWR_SCALE = [(0, "1"), (52 / 255, "1.5"), (89 / 255, "2"), (150 / 255, "3"), (1.0, "∞")]
+
+
+# --- fenêtre principale ---------------------------------------------------------
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"CAT Pilot FT-817 {__version__}")
+        self.settings = QSettings("F4JCF", "CATPilot-FT817")
+        self.ctrl = RigController()
+        self.server = None
+        self.band_mem = json.loads(self.settings.value("band_mem", "{}"))
+        self.toggles, self.sliders, self.combos = {}, {}, {}
+        self.extra_toggles = []
+        self.log = Log()
+        from .upload import Uploader
+        self.uploader = Uploader(self.log, self.settings)
+        self.log.added.connect(self._auto_upload)
+        self.uploader.progress.connect(lambda m: self.statusBar().showMessage(m, 8000))
+        self.uploader.finished.connect(self._upload_done)
+        from .qsl import ConfirmSync
+        self.qsl_sync = ConfirmSync(self.log, self.settings)
+        self.qsl_sync.progress.connect(lambda m: self.statusBar().showMessage(m, 15000))
+        self.qsl_sync.finished.connect(lambda m: self.statusBar().showMessage("Confirmations : " + m, 20000))
+        QTimer.singleShot(45000, self.qsl_sync.auto)
+        self._worked = set()
+        self._entities = None
+        self.log.changed.connect(self._reload_worked)
+        self._reload_worked()
+        self._want_backup = False
+        self._want_restore = False
+        self.controls = []
+        self._updating = False
+        self._last = None
+        self._state_time = 0.0
+        self._cur_band = None
+        self._last_pwr = None
+        self._tx_since = None
+        self.pwr_band = json.loads(self.settings.value("pwr_band", "{}"))
+        self.profiles = json.loads(self.settings.value("profiles", "null")) or dict(DEFAULT_PROFILES)
+
+        self.ctrl.state_changed.connect(self.on_state)
+        self.ctrl.status_changed.connect(self.on_status)
+        self.ctrl.job_done.connect(self.on_job)
+        self.ctrl.message.connect(lambda m: self.statusBar().showMessage(m))
+
+        self._build_ui()
+        self.mem = MemoryDock(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.mem)
+        self.mem.hide()
+        self.b_mems.toggled.connect(self.mem.setVisible)
+        self.mem.visibilityChanged.connect(self.b_mems.setChecked)
+        self.cw = CwDock(self)
+        self.txa = TxAudioDock(self)
+        self.dvk = VoiceDock(self)
+        self.spots = SpotsDock(self)
+        self.logdock = LogDock(self, self.log)
+        self.wsjtx = WsjtxDock(self, self.log)
+        self.rotor = RotorDock(self)
+        self.sat = SatDock(self)
+        self.sdr = SdrDock(self)
+        self.remote = RemoteDock(self)
+        self.mapdock = MapDock(self)
+        self.mc = MainCouranteDock(self)
+        self.digi = DigiDock(self)
+        from .extras import BigWaterfallDock
+        self.bigwf = BigWaterfallDock(self)
+        self.b_bigwf = QPushButton("Panoramique")
+        self.b_bigwf.setCheckable(True)
+        self.b_bigwf.setToolTip("Grande chute d'eau détachable")
+        self.dock_buttons = self.dock_buttons + (self.b_bigwf, self.b_mc)      # ADRASEC MC tout à droite
+        for dock, btn in ((self.bigwf, self.b_bigwf), (self.digi, self.b_digi), (self.mc, self.b_mc), (self.mapdock, self.b_map), (self.remote, self.b_remote), (self.sat, self.b_sat), (self.sdr, self.b_sdr), (self.rotor, self.b_rot), (self.cw, self.b_cw), (self.dvk, self.b_dvk), (self.txa, self.b_txa),
+                          (self.spots, self.b_spots), (self.logdock, self.b_log), (self.wsjtx, self.b_wsjtx)):
+            self.addDockWidget(Qt.RightDockWidgetArea, dock)
+            self.tabifyDockWidget(self.mem, dock)
+            dock.hide()
+            btn.toggled.connect(dock.setVisible)
+            dock.visibilityChanged.connect(btn.setChecked)
+        self._build_toolbar_and_menus()
+        self._build_extras()
+        from .extras import FocusHeader, FocusMode
+        self.focus_header = FocusHeader(self)
+        self.stack.addWidget(self.focus_header)
+        all_docks = [self.mem, self.bigwf, self.digi, self.mc, self.mapdock, self.remote, self.sat, self.sdr,
+                     self.rotor, self.cw, self.dvk, self.txa, self.spots, self.logdock, self.wsjtx]
+        self.focus = FocusMode(self, all_docks, self.stack, self.focus_header)
+        a = QAction("Panneaux en grand (face avant réduite)", self, checkable=True)
+        a.setChecked(self.focus.enabled)
+        a.setToolTip("Un panneau ouvert prend toute la fenêtre ; restent la fréquence et les galvanomètres")
+        a.toggled.connect(self.focus.set_enabled)
+        self.menu_aff.addAction(a)
+        QTimer.singleShot(0, self.focus.update)
+        self.compact = CompactWindow(self, FreqDisplay, BANDS, MODE_LABELS)
+        self.compact.restore.connect(self.restore_from_compact)
+        self.nmea = NmeaReader()
+        self.nmea.position.connect(lambda la, lo: self.set_station(la, lo, "GPS NMEA"))
+        self.nmea.status.connect(self.statusBar().showMessage)
+        self._load_settings()
+        self.act_night.setChecked(self.settings.value("night", "false") == "true")
+        scale = float(self.settings.value("text_scale", 1.0))
+        for a in self.size_group.actions():
+            a.setChecked(abs(a.data() - scale) < 0.01)
+        self.load_position()
+        self._set_enabled(False)
+        t = QTimer(self)
+        t.timeout.connect(self.update_clients)
+        t.timeout.connect(self.check_tx_timeout)
+        t.start(1000)
+
+    # --- fabriques de commandes --------------------------------------------
+    def _btn(self, label, slot=None, checkable=False):
+        b = QPushButton(label)
+        b.setCheckable(checkable)
+        if slot:
+            b.clicked.connect(slot)
+        self.controls.append(b)
+        return b
+
+    def _toggle(self, key, label):
+        b = self._btn(label, checkable=True)
+        b.clicked.connect(lambda c, k=key: self.ctrl.set_param(k, c))
+        self.toggles[key] = b
+        return b
+
+    def _slider(self, key, lo, hi, fmt, vertical=False, step=1):
+        s = QSlider(Qt.Vertical if vertical else Qt.Horizontal)
+        s.setRange(lo, hi)
+        s.setSingleStep(step)
+        s.setPageStep(step * 5)
+        val = QLabel("")
+        val.setObjectName("value")
+        val.setAlignment(Qt.AlignCenter)
+
+        def changed(v, k=key):
+            v = round(v / step) * step
+            val.setText(fmt(v))
+            if not self._updating:
+                self.ctrl.set_param(k, v)
+        s.valueChanged.connect(changed)
+        self.sliders[key] = (s, val, fmt)
+        self.controls.append(s)
+        return s, val
+
+    def _vslider(self, key, title, lo, hi, fmt):
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        s, val = self._slider(key, lo, hi, fmt, vertical=True)
+        self.vslider_widgets[key] = w
+        s.setMinimumHeight(110)
+        v.addWidget(s, 1, Qt.AlignHCenter)
+        t = QLabel(title)
+        t.setAlignment(Qt.AlignCenter)
+        v.addWidget(t)
+        v.addWidget(val)
+        return w
+
+    def _combo(self, key, items, slot=None):
+        c = QComboBox()
+        c.addItems(items)
+        c.activated.connect(slot or (lambda i, k=key: self.ctrl.set_param(k, i)))
+        self.combos[key] = c
+        self.controls.append(c)
+        return c
+
+    # --- construction --------------------------------------------------------
+    def _build_ui(self):
+        self.vslider_widgets = {}
+        self.panels = {}
+        root = QWidget()
+        g = self.main_grid = QGridLayout(root)
+        g.setSpacing(6)
+        g.setContentsMargins(6, 6, 6, 6)
+        from PySide6.QtWidgets import QStackedWidget
+        self.stack = QStackedWidget()
+        self.stack.addWidget(root)
+        self.setCentralWidget(self.stack)
+
+        # Bandes
+        pb = Panel("Bandes")
+        bl = QGridLayout(pb.body)
+        bl.setSpacing(4)
+        self.band_group = QButtonGroup(self)
+        self.band_buttons = {}
+        for i, (name, *_r) in enumerate(BANDS):
+            b = self._btn(name, checkable=True)
+            b.clicked.connect(lambda _c=False, n=name: self.goto_band(n))
+            self.band_group.addButton(b)
+            self.band_buttons[name] = b
+            bl.addWidget(b, i // 4, i % 4)
+        g.addWidget(pb, 0, 0)
+
+        # RF
+        pr = Panel("RF")
+        rl = QVBoxLayout(pr.body)
+        rl.setSpacing(4)
+        rl.addWidget(self._toggle("att", "ATT"))
+        self.b_pre = self._btn("IPO", self.cycle_preamp)
+        self.b_pre.setToolTip("Clic : IPO → AMP 1 → AMP 2")
+        rl.addWidget(self.b_pre)
+        rl.addWidget(self._combo("agc", AGC_LABELS))
+        rl.addWidget(self._toggle("atu", "ATU"))
+        rl.addWidget(self._btn("Tune", lambda: self.ctrl.action("tune")))
+        rl.addStretch()
+        g.addWidget(pr, 0, 1)
+        self.panels["rf"] = pr
+
+        # VFO
+        pv = Panel("VFO")
+        vl = QVBoxLayout(pv.body)
+        vl.setSpacing(5)
+        self.freq = FreqDisplay()
+        self.freq.tune.connect(self.tune_by)
+        vl.addWidget(self.freq)
+        self.bandplan = BandPlanBar(BANDS)
+        vl.addWidget(self.bandplan)
+        h = QHBoxLayout()
+        self.lb_mem = QLabel("VFO")
+        self.lb_mem.setObjectName("info")
+        self.lb_mem.setMinimumWidth(260)
+        self.lb_vfob_t = QLabel("VFO B")
+        self.lb_vfob_t.setObjectName("info")
+        self.vfob = FreqDisplay("vfob")
+        self.vfob.tune.connect(self.tune_b)
+        h.addWidget(self.lb_mem)
+        h.addStretch()
+        h.addWidget(self.lb_vfob_t)
+        h.addWidget(self.vfob)
+        vl.addLayout(h)
+        h = QHBoxLayout()
+        h.setSpacing(4)
+        for label, act in (("A/B", "swap"), ("A>B", "a_to_b"), ("B>A", "b_to_a")):
+            h.addWidget(self._btn(label, lambda _c=False, a=act: self.ctrl.action(a)))
+        h.addWidget(self._toggle("split", "Split"))
+        self.b_lock = self._toggle("lock", "LOCK")
+        self.b_lock.setToolTip("Verrouillage de la commande d'accord du poste")
+        h.addWidget(self.b_lock)
+        h.addSpacing(10)
+        self.b_vm = self._btn("V/M", lambda: self.ctrl.action("vm"), checkable=True)
+        h.addWidget(self.b_vm)
+        h.addWidget(self._btn("UP", lambda: self.step_mem_or_vfo(+1)))
+        h.addWidget(self._btn("DN", lambda: self.step_mem_or_vfo(-1)))
+        h.addSpacing(10)
+        b = self.b_qmb_sto = self._btn("QMB STO", lambda: self.ctrl.action("qmb_store"))
+        b.setToolTip("Mémoire rapide : enregistrer la fréquence actuelle")
+        h.addWidget(b)
+        b = self.b_qmb_rcl = self._btn("QMB RCL", lambda: self.ctrl.action("qmb_recall"))
+        b.setToolTip("Mémoire rapide : rappeler (clics successifs = mémoires suivantes)")
+        h.addWidget(b)
+        vl.addLayout(h)
+        h = QHBoxLayout()
+        self.ed_freq = QLineEdit()
+        self.ed_freq.setPlaceholderText("Fréquence en MHz, par ex. 145.500, puis Entrée")
+        self.ed_freq.returnPressed.connect(self.on_entry)
+        self.controls.append(self.ed_freq)
+        self.cb_step = QComboBox()
+        for label, val in STEPS:
+            self.cb_step.addItem(label, val)
+        self.cb_step.setCurrentIndex(1)
+        self.cb_step.currentIndexChanged.connect(self.on_step)
+        h.addWidget(self.ed_freq, 1)
+        self.b_recent = QPushButton("Récents")
+        self.b_recent.setToolTip("Les 10 dernières fréquences utilisées : un clic pour y revenir")
+        h.addWidget(self.b_recent)
+        h.addWidget(QLabel("Pas"))
+        h.addWidget(self.cb_step)
+        vl.addLayout(h)
+        g.addWidget(pv, 0, 2)
+
+        # Mesures
+        pm = Panel("Mesures")
+        ml = QVBoxLayout(pm.body)
+        mh = QHBoxLayout()
+        self.meter_s = AnalogMeter("S-mètre", S_SCALE, 130 / 255)
+        self.meter_swr = AnalogMeter("SWR", SWR_SCALE, 89 / 255)
+        mh.addWidget(self.meter_s)
+        mh.addWidget(self.meter_swr)
+        ml.addLayout(mh)
+        ah = QHBoxLayout()
+        ah.addWidget(QLabel("ALC"))
+        self.bar_alc = QProgressBar()
+        self.bar_alc.setRange(0, 1000)
+        self.bar_alc.setTextVisible(False)
+        self.bar_alc.setFixedHeight(10)
+        ah.addWidget(self.bar_alc, 1)
+        self.lb_meter = QLabel("")
+        self.lb_meter.setObjectName("value")
+        self.lb_meter.setMinimumWidth(130)
+        self.lb_meter.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        ah.addWidget(self.lb_meter)
+        ml.addLayout(ah)
+        self.wf = Waterfall()
+        self.wf.hover.connect(self.on_wf_hover)
+        self.wf.clicked.connect(self.on_wf_click)
+        self.wf.setToolTip("Clic sur un signal (BLU, CW, DATA) : le poste s'accorde dessus.\n"
+                           "La ligne pointillée montre où le signal sera placé.")
+        ml.addWidget(self.wf, 1)
+        wh = QHBoxLayout()
+        self.cb_audio = QComboBox()
+        self.cb_audio.setMinimumWidth(120)
+        self.cb_audio.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cb_audio.setMinimumContentsLength(14)
+        self.cb_audio.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.b_wf = QPushButton("Chute d'eau")
+        self.b_wf.setCheckable(True)
+        self.b_wf.setMinimumWidth(95)
+        self.b_wf.toggled.connect(self.toggle_waterfall)
+        self.sl_contrast = QSlider(Qt.Horizontal)
+        self.sl_contrast.setRange(15, 80)
+        self.sl_contrast.setValue(45)
+        self.sl_contrast.setMaximumWidth(90)
+        self.sl_contrast.setMinimumWidth(60)
+        self.sl_contrast.setToolTip("Contraste de la chute d'eau")
+        self.sl_contrast.valueChanged.connect(lambda v: setattr(self.wf, "contrast", float(v)))
+        self.sl_level = QSlider(Qt.Horizontal)
+        self.sl_level.setRange(-15, 30)
+        self.sl_level.setValue(5)
+        self.sl_level.setMaximumWidth(90)
+        self.sl_level.setMinimumWidth(60)
+        self.sl_level.setToolTip("Seuil : plus à droite, moins de bruit de fond visible")
+        self.sl_level.valueChanged.connect(lambda v: setattr(self.wf, "offset", float(v)))
+        self.lb_wf = QLabel("")
+        self.lb_wf.setObjectName("value")
+        self.lb_wf.setMinimumWidth(150)
+        # deux lignes : l'entrée audio a souvent un nom très long sous Windows
+        wh.addWidget(self.cb_audio, 1)
+        wh.addWidget(self.b_wf)
+        ml.addLayout(wh)
+        wh2 = QHBoxLayout()
+        wh2.addWidget(QLabel("Contraste"))
+        wh2.addWidget(self.sl_contrast)
+        wh2.addWidget(QLabel("Seuil"))
+        wh2.addWidget(self.sl_level)
+        self.b_rec = QPushButton("● Enregistrer")
+        self.b_rec.setCheckable(True)
+        self.b_rec.setToolTip("Enregistre l'audio de réception en WAV dans Documents\\CATPilot-FT817\\enregistrements")
+        self.b_rec.toggled.connect(self.toggle_recording)
+        wh2.addWidget(self.b_rec)
+        wh2.addStretch()
+        wh2.addWidget(self.lb_wf)
+        ml.addLayout(wh2)
+        self.refresh_audio()
+        g.addWidget(pm, 0, 3)
+
+        # Modes
+        pmo = Panel("Mode")
+        mo = QGridLayout(pmo.body)
+        mo.setSpacing(4)
+        self.mode_group = QButtonGroup(self)
+        self.mode_buttons = {}
+        for i, (mode, label) in enumerate(MODE_BUTTONS):
+            b = self._btn(label, checkable=True)
+            b.clicked.connect(lambda _c=False, m=mode: self.ctrl.set_mode(m))
+            self.mode_group.addButton(b)
+            self.mode_buttons[mode] = b
+            mo.addWidget(b, i // 3, i % 3)
+        g.addWidget(pmo, 1, 0)
+
+        # CW
+        pc = Panel("CW")
+        cl = QHBoxLayout(pc.body)
+        cv = QVBoxLayout()
+        cv.addWidget(self._toggle("keyer", "Keyer"))
+        cv.addWidget(self._toggle("bkin", "BK-IN"))
+        cv.addWidget(self._btn("ZIN", lambda: self.ctrl.action("zin")))
+        cv.addStretch()
+        cl.addLayout(cv)
+        cl.addWidget(self._vslider("wpm", "Vitesse", 4, 60, lambda v: f"{v} wpm"))
+        g.addWidget(pc, 1, 1)
+        self.panels["cw"] = pc
+
+        # Clarifier + FM
+        pcl = Panel("Clarifier et relais FM")
+        ql = QGridLayout(pcl.body)
+        ql.setSpacing(4)
+        self.b_rxclar = self._btn("RX", checkable=True)
+        self.b_rxclar.clicked.connect(lambda c: self.ctrl.action("rx_clar", c))
+        self.b_txclar = self._btn("TX", checkable=True)
+        self.b_txclar.clicked.connect(lambda c: self.ctrl.action("tx_clar", c))
+        self.lb_clar = QLabel("+0000 Hz")
+        self.lb_clar.setObjectName("vfob")
+        self.lb_clar.setAlignment(Qt.AlignCenter)
+        ql.addWidget(self.b_rxclar, 0, 0)
+        ql.addWidget(self.lb_clar, 0, 1, 1, 3)
+        ql.addWidget(self.b_txclar, 0, 4)
+        for i, d in enumerate((-100, -10, 10, 100)):
+            ql.addWidget(self._btn(f"{d:+d}", lambda _c=False, d=d: self.ctrl.action("clar_step", d)),
+                         1, i if i < 2 else i + 1)
+        ql.addWidget(self._btn("CLR", lambda: self.ctrl.action("clar_clear")), 1, 2)
+        ql.addWidget(self._combo("rpt_shift", SHIFT_LABELS), 2, 0, 1, 5)
+        ql.addWidget(self._combo("tone_mode", TONE_MODES), 3, 0, 1, 3)
+        ql.addWidget(self._combo("tone", [f"{t:.1f} Hz" for t in CTCSS]), 3, 3, 1, 2)
+        g.addWidget(pcl, 1, 2)
+
+        # Émission
+        pt = Panel("Émission")
+        tl = QHBoxLayout(pt.body)
+        tl.addWidget(self._vslider("pwr", "Puissance", 5, 100, lambda v: f"{v} W"))
+        tl.addWidget(self._vslider("mic", "Micro", 0, 100, str))
+        tv = QVBoxLayout()
+        self.b_ptt = self._btn("MOX", checkable=True)
+        self.b_ptt.setObjectName("ptt")
+        self.b_ptt.toggled.connect(lambda on: None if self._updating else self.ctrl.set_ptt(on))
+        tv.addWidget(self.b_ptt)
+        tv.addWidget(self._toggle("vox", "VOX"))
+        tv.addWidget(self._toggle("proc", "PROC"))
+        self.lb_txhint = QLabel("Puissance, micro, VOX et processeur :\nà régler sur le poste\n(non pilotables par le CAT).")
+        self.lb_txhint.setObjectName("hint")
+        self.lb_txhint.setWordWrap(True)
+        tv.addWidget(self.lb_txhint)
+        tv.addStretch()
+        tl.addLayout(tv)
+        g.addWidget(pt, 1, 3)
+        self.panels["tx"] = pt
+
+        # Réception
+        prx = Panel("Réception")
+        xl = QHBoxLayout(prx.body)
+        xl.addWidget(self._vslider("af", "Volume", 0, 255, lambda v: f"{round(v / 2.55)} %"))
+        xl.addWidget(self._vslider("rf", "Gain HF", 0, 255, lambda v: f"{round(v / 2.55)} %"))
+        xl.addWidget(self._vslider("sql", "Squelch", 0, 100, str))
+        g.addWidget(prx, 2, 0)
+        self.panels["rx"] = prx
+
+        # Filtres
+        pf = Panel("Filtres")
+        fl = QGridLayout(pf.body)
+        fl.setHorizontalSpacing(10)
+        fl.setVerticalSpacing(4)
+
+        def cell(r, c, left, key, lo, hi, fmt, step=1):
+            sl, val = self._slider(key, lo, hi, fmt, step=step)
+            val.setMinimumWidth(70)
+            fl.addWidget(left, r, c)
+            fl.addWidget(sl, r, c + 1)
+            fl.addWidget(val, r, c + 2)
+
+        cell(0, 0, QLabel("Largeur"), "width", 0, 21, self.width_text)
+        cell(1, 0, QLabel("Shift"), "shift", -1200, 1200, lambda v: f"{v:+d} Hz", step=20)
+        cell(2, 0, self._toggle("contour", "Contour"), "contour_f", 10, 3200,
+             lambda v: f"{v} Hz", step=10)
+        cell(0, 3, self._toggle("notch", "Notch"), "notch_f", 1, 320, lambda v: f"{v * 10} Hz")
+        cell(1, 3, self._toggle("dnr", "DNR"), "dnr_lvl", 1, 15, lambda v: f"niveau {v}")
+        bh = QHBoxLayout()
+        for key, label in (("nar", "NAR"), ("nb", "NB"), ("dnf", "DNF"), ("apf", "APF")):
+            bh.addWidget(self._toggle(key, label))
+        fl.addLayout(bh, 2, 3, 1, 3)
+        g.addWidget(pf, 2, 1, 1, 3)
+        self.panels["filters"] = pf
+
+        # Liaison et partage
+        pl = Panel("Liaison et partage du CAT")
+        lv = QVBoxLayout(pl.body)
+        lv.setContentsMargins(0, 0, 0, 0)
+        ll = QHBoxLayout()
+        self.cb_rig = QComboBox()
+        self.cb_rig.addItems(DRIVERS.keys())
+        self.cb_rig.currentTextChanged.connect(self.on_rig_changed)
+        self.cb_port = QComboBox()
+        self.cb_port.setMinimumWidth(230)
+        b_ref = QPushButton("⟳")
+        b_ref.setToolTip("Actualiser la liste des ports")
+        b_ref.clicked.connect(self.refresh_ports)
+        self.cb_baud = QComboBox()
+        self.cb_baud.addItems(["4800", "9600", "19200", "38400", "57600", "115200"])
+        self.cb_stop = QComboBox()
+        self.cb_stop.addItems(["1", "2"])
+        self.b_conn = QPushButton("Connecter")
+        self.b_conn.clicked.connect(lambda: self.toggle_connection())
+        for w in (self.cb_rig, QLabel("Port"), self.cb_port, b_ref, QLabel("Vitesse"),
+                  self.cb_baud, QLabel("Stop"), self.cb_stop, self.b_conn):
+            ll.addWidget(w)
+        ll.addSpacing(20)
+        self.ck_srv = QCheckBox("Serveur rigctld")
+        self.ck_srv.setToolTip("WSJT-X : Radio « Hamlib NET rigctl », serveur 127.0.0.1:4534, PTT « CAT »")
+        self.ck_srv.toggled.connect(self.toggle_server)
+        self.sp_port = QSpinBox()
+        self.sp_port.setRange(1024, 65535)
+        self.sp_port.setValue(4534)
+        self.lb_clients = QLabel("arrêté")
+        self.lb_clients.setObjectName("hint")
+        ll.addWidget(self.ck_srv)
+        ll.addWidget(self.sp_port)
+        ll.addWidget(self.lb_clients)
+        ll.addStretch()
+        self.b_mems = QPushButton("Mémoires")
+        self.b_mems.setCheckable(True)
+        self.b_cw = QPushButton("CW clavier")
+        self.b_cw.setCheckable(True)
+        self.b_txa = QPushButton("Audio TX")
+        self.b_txa.setCheckable(True)
+        self.b_dvk = QPushButton("Messages vocaux")
+        self.b_dvk.setCheckable(True)
+        self.b_spots = QPushButton("Spots")
+        self.b_spots.setCheckable(True)
+        self.b_log = QPushButton("Carnet")
+        self.b_log.setCheckable(True)
+        self.b_wsjtx = QPushButton("WSJT-X")
+        self.b_wsjtx.setCheckable(True)
+        self.b_rot = QPushButton("Rotor")
+        self.b_rot.setCheckable(True)
+        self.b_sat = QPushButton("Satellites")
+        self.b_sat.setCheckable(True)
+        self.b_sdr = QPushButton("SDR")
+        self.b_sdr.setCheckable(True)
+        self.b_remote = QPushButton("À distance")
+        self.b_remote.setCheckable(True)
+        self.b_map = QPushButton("Carte")
+        self.b_map.setCheckable(True)
+        self.b_digi = QPushButton("Numérique")
+        self.b_digi.setCheckable(True)
+        self.b_digi.setToolTip("FT8, FT4, RTTY, PSK31 et SSTV intégrés")
+        self.b_mc = QPushButton("ADRASEC MC")
+        self.b_mc.setCheckable(True)
+        self.b_mc.setToolTip("Journal horodaté des messages (ADRASEC, sécurité civile)")
+        self.dock_buttons = (self.b_spots, self.b_map, self.b_log, self.b_digi, self.b_wsjtx, self.b_mems, self.b_cw,
+                             self.b_dvk, self.b_txa, self.b_rot, self.b_sat, self.b_sdr, self.b_remote)
+        lv.addLayout(ll)
+        lo = QHBoxLayout()
+        self.ck_auto = QCheckBox("Se connecter au lancement du logiciel")
+        self.ck_on = QCheckBox("Allumer le poste à la connexion")
+        self.ck_off = QCheckBox("Éteindre le poste à la fermeture du logiciel")
+        self.ck_on.setToolTip("Le poste doit rester alimenté en 13,8 V et relié en USB")
+        for w in (self.ck_auto, self.ck_on, self.ck_off):
+            lo.addWidget(w)
+            lo.addSpacing(16)
+        lo.addStretch()
+        lv.addLayout(lo)
+        pl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        g.addWidget(pl, 3, 0, 1, 4)
+        for r, k in ((0, 3), (1, 2), (2, 2)):   # la ligne du haut (chute d'eau) prend plus de place
+            g.setRowStretch(r, k)
+        g.setRowStretch(3, 0)
+
+        g.setColumnStretch(2, 1)
+        g.setColumnStretch(3, 1)
+        self.statusBar().showMessage("Choisissez le poste et le port de son câble CAT, puis cliquez sur Connecter")
+        self.refresh_ports()
+
+    # --- réglages ----------------------------------------------------------------
+    def _load_settings(self):
+        s = self.settings
+        rig = s.value("rig", "Yaesu FT-817")
+        if rig in DRIVERS:
+            self.cb_rig.setCurrentText(rig)
+        self.on_rig_changed(self.cb_rig.currentText(), keep_saved=True)
+        i = self.cb_port.findData(s.value("port", ""))
+        if i >= 0:
+            self.cb_port.setCurrentIndex(i)
+        self.cb_baud.setCurrentText(str(s.value("baud", "4800")))
+        self.cb_stop.setCurrentText(str(s.value("stop", "2")))
+        self.sp_port.setValue(int(s.value("tcp_port", 4534)))
+        if s.value("geometry"):
+            self.restoreGeometry(s.value("geometry"))
+        if s.value("server", "false") == "true":
+            self.ck_srv.setChecked(True)
+        self.refresh_audio(s.value("audio", ""))
+        self.ck_auto.setChecked(s.value("auto_connect", "true") == "true")
+        self.ck_on.setChecked(s.value("power_on", "true") == "true")
+        self.ck_off.setChecked(s.value("power_off", "true") == "true")
+        self.ck_pwrband.setChecked(s.value("pwr_by_band", "true") == "true")
+        self.sp_tot.setValue(int(s.value("tx_timeout", 3)))
+        self.refresh_profiles()
+        if self.ck_auto.isChecked():
+            QTimer.singleShot(400, self.auto_connect)
+        self.sl_contrast.setValue(int(s.value("wf_contrast", 45)))
+        self.sl_level.setValue(int(s.value("wf_level", 5)))
+
+    def closeEvent(self, e):
+        s = self.settings
+        s.setValue("rig", self.cb_rig.currentText())
+        s.setValue("port", self.cb_port.currentData() or "")
+        s.setValue("baud", self.cb_baud.currentText())
+        s.setValue("stop", self.cb_stop.currentText())
+        s.setValue("tcp_port", self.sp_port.value())
+        s.setValue("server", "true" if self.ck_srv.isChecked() else "false")
+        s.setValue("band_mem", json.dumps(self.band_mem))
+        s.setValue("geometry", self.saveGeometry())
+        s.setValue("dock_state", base64.b64encode(bytes(self.saveState())).decode())
+        self.qsy.save(s)
+        s.setValue("wf_size", self.wf_size)
+        s.setValue("freq_size", self.freq_size)
+        s.setValue("speak_freq", self.announcer.enabled)
+        s.setValue("speak_alerts", self.speak_alerts)
+        s.setValue("audio", self.cb_audio.currentText())
+        s.setValue("auto_connect", "true" if self.ck_auto.isChecked() else "false")
+        s.setValue("power_on", "true" if self.ck_on.isChecked() else "false")
+        s.setValue("power_off", "true" if self.ck_off.isChecked() else "false")
+        s.setValue("pwr_by_band", "true" if self.ck_pwrband.isChecked() else "false")
+        s.setValue("tx_timeout", self.sp_tot.value())
+        s.setValue("pwr_band", json.dumps(self.pwr_band))
+        s.setValue("profiles", json.dumps(self.profiles))
+        self.mem.scanning = False
+        self.cw.save_settings(s)
+        self.dvk.save_settings(s)
+        self.spots.save_settings(s)
+        self.mapdock.save_settings(s)
+        self.mc.save_settings(s)
+        self.digi.save_settings(s)
+        self.logdock.save_settings(s)
+        self.wsjtx.save_settings(s)
+        self.rotor.save_settings(s)
+        self.sat.save_settings(s)
+        self.sdr.save_settings(s)
+        self.remote.save_settings(s)
+        s.setValue("oob_cut", "true" if self.act_oob.isChecked() else "false")
+        s.setValue("night", "true" if self.act_night.isChecked() else "false")
+        s.setValue("text_scale", self.text_scale())
+        self.nmea.stop()
+        s.setValue("wf_contrast", self.sl_contrast.value())
+        s.setValue("wf_level", self.sl_level.value())
+        self.wf.stop()
+        power_off = self.ck_off.isChecked() and not self._restart_for_update
+        if self.ctrl.connected and power_off:
+            self.statusBar().showMessage("Extinction du poste…")
+            QApplication.processEvents()
+        was = self.ctrl.connected
+        self.ctrl.disconnect_rig(power_off=power_off)
+        if power_off and not was:
+            # liaison perdue avant la fermeture : on envoie quand même l'ordre d'extinction
+            cls = DRIVERS.get(self.cb_rig.currentText())
+            port = self.cb_port.currentData()
+            if cls and port and cls is not SimDriver and not getattr(cls, "is_remote", False) \
+                    and hasattr(cls, "power_off"):
+                try:
+                    self.ctrl.power_off_port(cls(port, int(self.cb_baud.currentText()),
+                                                 int(self.cb_stop.currentText())))
+                except Exception:
+                    pass
+        if self.server:
+            self.server.stop()
+        super().closeEvent(e)
+
+    # --- liaison -------------------------------------------------------------------
+    def refresh_ports(self):
+        cur = self.cb_port.currentData()
+        self.cb_port.clear()
+        enhanced = -1
+        for p in sorted(serial.tools.list_ports.comports(), key=lambda p: p.device):
+            self.cb_port.addItem(f"{p.device} — {p.description}", p.device)
+            if "enhanced" in p.description.lower():
+                enhanced = self.cb_port.count() - 1
+        i = self.cb_port.findData(cur)
+        if i >= 0:
+            self.cb_port.setCurrentIndex(i)
+        elif enhanced >= 0:
+            self.cb_port.setCurrentIndex(enhanced)
+
+    def on_rig_changed(self, name, keep_saved=False):
+        cls = DRIVERS.get(name)
+        if not cls:
+            return
+        if not keep_saved:
+            self.cb_baud.setCurrentText(str(cls.default_baud))
+            self.cb_stop.setCurrentText(str(cls.default_stopbits))
+        serial_rig = cls is not SimDriver and not getattr(cls, "is_remote", False)
+        for w in (self.cb_port, self.cb_baud, self.cb_stop):
+            w.setEnabled(serial_rig)
+        if hasattr(self, "mode_buttons") and not self.ctrl.connected:
+            self._adapt_to_rig(cls)
+
+    def auto_connect(self):
+        """Connexion automatique au lancement, si un port a déjà été utilisé."""
+        if self.ctrl.connected:
+            return
+        cls = DRIVERS[self.cb_rig.currentText()]
+        if cls is SimDriver or getattr(cls, "is_remote", False) and self.settings.value("remote_host", "") \
+                or self.cb_port.findData(self.settings.value("port", "")) >= 0:
+            self.toggle_connection()
+
+    def toggle_connection(self, quiet=False):
+        if not quiet and getattr(self, "_reconnect", None):
+            self._reconnect.stop()                   # l'utilisateur reprend la main
+        if self.ctrl.connected:
+            self.ctrl.disconnect_rig()
+            return
+        cls = DRIVERS[self.cb_rig.currentText()]
+        if getattr(cls, "is_remote", False):
+            port = self.remote.prepare_client()
+            if not port:
+                self.b_remote.setChecked(True)
+                QMessageBox.information(self, "Poste distant", "Indiquez l'adresse de la station et son mot de "
+                                        "passe dans le panneau « Accès à distance ».")
+                return
+        else:
+            port = "SIM" if cls is SimDriver else self.cb_port.currentData()
+        if not port:
+            QMessageBox.warning(self, "Aucun port", "Aucun port série n'est sélectionné. "
+                                "Branchez le câble USB du poste puis cliquez sur ⟳.")
+            return
+        try:
+            self.ctrl.connect_rig(cls(port, int(self.cb_baud.currentText()),
+                                      int(self.cb_stop.currentText())),
+                                  power_on=self.ck_on.isChecked())
+        except Exception as e:
+            if quiet:
+                self.statusBar().showMessage(f"Reconnexion impossible pour l'instant ({e}) ; nouvel essai dans 5 s")
+                return
+            if getattr(cls, "is_remote", False):
+                QMessageBox.critical(self, "Connexion impossible", f"La station {port} n'a pas pu être jointe.\n\n{e}")
+                return
+            QMessageBox.critical(self, "Connexion impossible",
+                                 f"Le port {port} n'a pas pu être ouvert.\n\n{e}\n\n"
+                                 "Vérifiez qu'aucun autre logiciel ne l'utilise déjà.")
+
+    def on_status(self, ok, msg):
+        lost = not ok and msg.startswith("Liaison perdue")
+        if not ok and self.ctrl.driver:          # liaison perdue : on libère le port
+            self.ctrl.disconnect_rig()
+        self.statusBar().showMessage(msg)
+        if ok and getattr(self, "_reconnect", None) and self._reconnect.isActive():
+            self._reconnect.stop()
+            self.statusBar().showMessage(msg + " (reconnecté automatiquement)")
+        if lost and self.settings.value("auto_reconnect", "true") in (True, "true"):
+            if not getattr(self, "_reconnect", None):
+                self._reconnect = QTimer(self)
+                self._reconnect.timeout.connect(self._try_reconnect)
+            self._reconnect_n = 0
+            self._reconnect.start(5000)
+            self.statusBar().showMessage(msg + " — reconnexion automatique dans 5 s")
+        self.b_conn.setText("Déconnecter" if ok else "Connecter")
+        self.cb_rig.setEnabled(not ok)
+        for w in (self.cb_port, self.cb_baud, self.cb_stop):
+            w.setEnabled(False)
+        if not ok:
+            self.on_rig_changed(self.cb_rig.currentText(), keep_saved=True)
+            self._updating = True
+            self.b_ptt.setChecked(False)
+            self._updating = False
+            self.meter_s.set_value(0)
+            self.meter_swr.set_value(0)
+        self._set_enabled(ok)
+        self._adapt_to_rig(self.ctrl.driver if ok else DRIVERS.get(self.cb_rig.currentText()))
+
+    def open_cat_log(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        path = os.path.join(os.path.expanduser("~"), "Documents", "CATPilot-FT817", "journal_cat.txt")
+        if not os.path.exists(path):
+            QMessageBox.information(self, "Journal CAT", "Le journal est encore vide.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def _try_reconnect(self):
+        if self.ctrl.connected:
+            self._reconnect.stop()
+            return
+        self._reconnect_n += 1
+        from .controller import cat_log
+        cat_log(f"reconnexion automatique, essai {self._reconnect_n}")
+        keep = self.ck_on.isChecked()
+        self.ck_on.setChecked(False)              # pas de rallumage pendant une reconnexion
+        try:
+            self.toggle_connection(quiet=True)
+        finally:
+            self.ck_on.setChecked(keep)
+
+    def _set_enabled(self, on):
+        for w in self.controls:
+            w.setEnabled(on)
+
+    # --- commandes -------------------------------------------------------------------
+    def on_step(self):
+        self.freq.default_step = self.cb_step.currentData()
+
+    def tune_by(self, delta):
+        f = self.ctrl.snapshot().freq + delta
+        self.ctrl.set_freq(max(30000, min(getattr(self.ctrl.driver, "max_freq", 470_000_000), f)))
+
+    def tune_b(self, delta):
+        f = self.ctrl.snapshot().p.get("vfob", 0) + delta
+        if f > 0:
+            self.ctrl.set_param("vfob", max(30000, min(getattr(self.ctrl.driver, "max_freq", 470_000_000), f)))
+
+    def on_entry(self):
+        txt = self.ed_freq.text().strip().replace(",", ".")
+        try:
+            val = float(txt)
+        except ValueError:
+            self.statusBar().showMessage(f"« {txt} » n'est pas une fréquence valide")
+            return
+        hz = val * 1e6 if val < 1000 else val * 1e3 if val < 1e6 else val
+        self.ctrl.set_freq(round(hz))
+        self.ed_freq.clear()
+
+    def cycle_preamp(self):
+        cur = self.ctrl.snapshot().p.get("pre", 0)
+        self.ctrl.set_param("pre", (cur + 1) % 3)
+
+    def step_mem_or_vfo(self, d):
+        info = self.ctrl.snapshot().p.get("info", {})
+        if info.get("vm") and self.mem.memories:
+            chans = [m["ch"] for m in self.mem.memories]
+            cur = info.get("ch", chans[0])
+            nxt = [c for c in chans if (c > cur if d > 0 else c < cur)]
+            if nxt:
+                self.ctrl.action("mem_recall", nxt[0] if d > 0 else nxt[-1])
+                return
+        self.ctrl.action("up" if d > 0 else "down")
+
+    @staticmethod
+    def band_of(hz):
+        for name, lo, hi, _d in BANDS:
+            if lo <= hz <= hi:
+                return name
+        return None
+
+    def goto_band(self, name):
+        cur = self.ctrl.snapshot().freq
+        b = self.band_of(cur)
+        if b:
+            self.band_mem[b] = cur           # dernière fréquence utilisée sur chaque bande
+        default = next(d for n, _l, _h, d in BANDS if n == name)
+        self.ctrl.set_freq(self.band_mem.get(name, default))
+
+    def width_text(self, v):
+        mode = self._last.mode if self._last else "USB"
+        if v == 0:
+            return "défaut"
+        table = WIDTH_CW if mode in CW_LIKE else WIDTH_SSB if mode in ("USB", "LSB") else None
+        if table and v in table:
+            return f"{table[v]} Hz"
+        return f"pos. {v}"
+
+    # --- chute d'eau ---------------------------------------------------------------
+    def refresh_audio(self, wanted=None):
+        self.cb_audio.clear()
+        inputs = list_inputs()
+        for dev, label in inputs:
+            self.cb_audio.addItem(label, dev)
+        i = self.cb_audio.findText(wanted) if wanted else -1
+        if i < 0:
+            i = self.cb_audio.findData(guess_radio_input(inputs))
+        if i >= 0:
+            self.cb_audio.setCurrentIndex(i)
+
+    def toggle_waterfall(self, on):
+        if on:
+            try:
+                self.wf.start(self.cb_audio.currentData())
+            except Exception as e:
+                QMessageBox.warning(self, "Chute d'eau", f"L'entrée audio n'a pas pu être ouverte.\n\n{e}")
+                self.b_wf.blockSignals(True)
+                self.b_wf.setChecked(False)
+                self.b_wf.blockSignals(False)
+                return
+        else:
+            self.wf.stop()
+            self._uncheck(self.b_rec)
+            self.cw.b_dec.setChecked(False)
+        self.cb_audio.setEnabled(not on)
+
+    def on_wf_hover(self, audio_hz):
+        if audio_hz is None or not self._last:
+            self.lb_wf.setText("")
+            return
+        st = self._last
+        sign = -1 if st.mode in ("LSB", "PKTLSB", "RTTY") else 1
+        rf = st.freq + sign * audio_hz
+        mhz, rest = divmod(rf, 1_000_000)
+        self.lb_wf.setText(f"{audio_hz} Hz → {mhz}.{rest // 1000:03d}.{rest % 1000:03d}")
+
+    # --- barre d'outils, menus et raccourcis -----------------------------------------
+    def _build_toolbar_and_menus(self):
+        # rangée des panneaux, juste sous le menu
+        pt = QToolBar("Panneaux")
+        pt.setObjectName("paneltoolbar")
+        pt.setMovable(False)
+        self.addToolBar(Qt.TopToolBarArea, pt)
+        t = QLabel(" Panneaux : ")
+        t.setObjectName("hint")
+        pt.addWidget(t)
+        self.dock_actions = {}
+        for b in self.dock_buttons:
+            self.dock_actions[b] = pt.addWidget(b)
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        tb = QToolBar("Outils")
+        tb.setObjectName("toolbar")
+        tb.setMovable(False)
+        self.addToolBar(Qt.TopToolBarArea, tb)
+        tb.addWidget(QLabel(" Profil "))
+        self.cb_prof = QComboBox()
+        self.cb_prof.setMinimumWidth(170)
+        tb.addWidget(self.cb_prof)
+        for label, slot, tip in (("Appliquer", self.apply_profile, "Règle le poste selon le profil choisi"),
+                                 ("Enregistrer…", self.save_profile, "Crée un profil à partir des réglages actuels"),
+                                 ("Supprimer", self.delete_profile, "")):
+            b = QPushButton(label)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            tb.addWidget(b)
+            if label == "Appliquer":
+                self.controls.append(b)
+        tb.addSeparator()
+        self.ck_pwrband = QCheckBox("Puissance mémorisée par bande")
+        self.ck_pwrband.setToolTip("Chaque bande retrouve la dernière puissance utilisée")
+        self.act_pwrband = tb.addWidget(self.ck_pwrband)
+        tb.addSeparator()
+        tb.addWidget(QLabel("Sécurité TX : coupure après "))
+        self.sp_tot = QSpinBox()
+        self.sp_tot.setRange(0, 30)
+        self.sp_tot.setSuffix(" min")
+        self.sp_tot.setSpecialValueText("désactivée")
+        self.sp_tot.setToolTip("Coupe l'émission si elle dure plus longtemps (quel que soit le logiciel)")
+        tb.addWidget(self.sp_tot)
+        tb.addSeparator()
+        self.lb_utc = QLabel("")
+        self.lb_utc.setObjectName("info")
+        self.lb_utc.setToolTip("Heure UTC (heure locale entre parenthèses)")
+        tb.addWidget(self.lb_utc)
+        tb.addSeparator()
+        self.b_loc = QPushButton("Locator ?")
+        self.b_loc.setFlat(True)
+        self.b_loc.setStyleSheet("QPushButton { border: none; background: transparent; font-weight: bold; }")
+        self.b_loc.setToolTip("Position de la station. Clic : régler")
+        self.b_loc.clicked.connect(self.position_dialog)
+        tb.addWidget(self.b_loc)
+        tb.addSeparator()
+        self.b_prop = QPushButton("Propagation…")
+        self.b_prop.setFlat(True)
+        self.b_prop.setStyleSheet("QPushButton { border: none; background: transparent; text-align: left; }")
+        self.b_prop.setToolTip("Clic : actualiser")
+        self.b_prop.clicked.connect(lambda: self.prop.refresh())
+        tb.addWidget(self.b_prop)
+        self.prop = Propagation()
+        self.prop.updated.connect(self.on_propagation)
+        QTimer.singleShot(1500, self.prop.refresh)
+        self._clock = QTimer(self)
+        self._clock.timeout.connect(self.update_clock)
+        self._clock.start(1000)
+        self.update_clock()
+
+        mb = self.menuBar()
+        m = self.menu_poste = mb.addMenu("Poste")
+        self.menu_actions = []
+        for label, slot in (("Allumer et connecter", self.power_on_connect),
+                            ("Éteindre et déconnecter", self.power_off_disconnect), (None, None),
+                            ("Sauvegarder les menus du poste…", self.backup_menus),
+                            ("Restaurer les menus du poste…", self.restore_menus), (None, None),
+                            ("Ouvrir le dossier des sauvegardes", self.open_backup_dir)):
+            if label is None:
+                m.addSeparator()
+                continue
+            a = QAction(label, self)
+            a.triggered.connect(slot)
+            m.addAction(a)
+            if "menus" in label:
+                self.menu_actions.append(a)
+        aff = self.menu_aff = mb.addMenu("Affichage")
+        for label, btn in (("Spots POTA, SOTA et DX", self.b_spots), ("Carte et ligne grise", self.b_map),
+                           ("Carnet de trafic", self.b_log), ("Modes numériques (FT8, RTTY, PSK31, SSTV)", self.b_digi),
+                           ("WSJT-X", self.b_wsjtx), ("Mémoires et scan", self.b_mems),
+                           ("CW au clavier", self.b_cw), ("Messages vocaux", self.b_dvk),
+                           ("Audio d'émission", self.b_txa), ("Rotor d'antenne", self.b_rot),
+                           ("Satellites", self.b_sat), ("Panoramique SDR", self.b_sdr),
+                           ("Accès à distance", self.b_remote), ("Main courante (ADRASEC)", self.b_mc)):
+            a = QAction(label, self)
+            a.triggered.connect(lambda _c=False, b=btn: b.setChecked(True))
+            aff.addAction(a)
+            if btn is self.b_txa:
+                self.menu_actions.append(a)      # réglages audio d'émission : par les menus du poste
+        a = QAction("Menus du poste…", self)
+        a.triggered.connect(lambda: self.open_menu_editor(""))
+        m.addAction(a)
+        self.menu_actions.append(a)
+        m.addSeparator()
+        a = QAction("Position de la station…", self)
+        a.triggered.connect(self.position_dialog)
+        m.addAction(a)
+        self.act_oob = QAction("Couper l'émission hors des bandes amateurs", self, checkable=True)
+        self.act_oob.setChecked(self.settings.value("oob_cut", "true") == "true")
+        m.addAction(self.act_oob)
+
+        aff.addSeparator()
+        self.act_compact = QAction("Mode compact", self)
+        self.act_compact.setShortcut("Ctrl+K")
+        self.act_compact.triggered.connect(self.show_compact)
+        aff.addAction(self.act_compact)
+        self.act_night = QAction("Mode nuit", self, checkable=True)
+        self.act_night.setShortcut("Ctrl+N")
+        self.act_night.toggled.connect(lambda _on: self.apply_look())
+        aff.addAction(self.act_night)
+        langs = aff.addMenu("Langue")
+        self.lang_group = QActionGroup(self)
+        from .i18n import LANGS
+        for code, label in LANGS.items():
+            a = QAction(label, self, checkable=True)
+            a.setData(code)
+            a.setChecked(self.settings.value("lang", "fr") == code)
+            a.triggered.connect(lambda _c=False, c=code: self.change_language(c))
+            self.lang_group.addAction(a)
+            langs.addAction(a)
+        sizes = aff.addMenu("Taille du texte")
+        self.size_group = QActionGroup(self)
+        for pct in (90, 100, 115, 130):
+            a = QAction(f"{pct} %", self, checkable=True)
+            a.setData(pct / 100)
+            a.triggered.connect(lambda _c=False: self.apply_look())
+            self.size_group.addAction(a)
+            sizes.addAction(a)
+        cm = mb.addMenu("Carnet")
+        for label, slot in (("Ouvrir le carnet", lambda: self.b_log.setChecked(True)),
+                            ("Importer un fichier ADIF…", lambda: self.logdock.import_adif()),
+                            ("Exporter tout le carnet en ADIF…", lambda: self.logdock.export_adif()),
+                            ("Exporter l'activation du jour (POTA/SOTA)…", lambda: self.logdock.export_activation()),
+                            (None, None),
+                            ("Exporter un concours en Cabrillo…", lambda: self.logdock.export_cabrillo()),
+                            ("Sauvegarde Nextcloud…", self.backup_dialog),
+                            ("Envoi en ligne : QRZ.com, eQSL, Club Log, LoTW…", self.upload_dialog),
+                            ("Relever les confirmations eQSL et LoTW", self.qsl_sync_now),
+                            ("Étiquettes QSL des cartes à envoyer…", lambda: self.qsl_labels(None)),
+                            ("Diplômes et statistiques…", self.awards_dialog),
+                            (None, None),
+                            ("Réglages : indicatif, HamQTH, QRZCQ et QRZ.com…", self.log_settings)):
+            if label is None:
+                cm.addSeparator()
+                continue
+            a = QAction(label, self)
+            a.triggered.connect(slot)
+            cm.addAction(a)
+        h = mb.addMenu("Aide")
+        a = QAction("Raccourcis clavier", self)
+        a.triggered.connect(self.show_shortcuts)
+        h.addAction(a)
+        a = QAction("À propos de CAT Pilot", self)
+        a.triggered.connect(lambda: QMessageBox.about(
+            self, "CAT Pilot", f"CAT Pilot {__version__}\nPilotage CAT de postes Yaesu et Icom\nF4JCF"))
+        h.addAction(a)
+
+        # Mise à jour, à côté de « Aide »
+        self.upd = Updater()
+        self.upd.checked.connect(self.on_update_checked)
+        self.upd.progress.connect(self.on_update_progress)
+        self.upd.downloaded.connect(self.on_update_downloaded)
+        self._upd_dialog = None
+        self._restart_for_update = False
+        self.menu_upd = mb.addMenu("Mise à jour")
+        self.mb_style = MenuBarStyle()
+        mb.setStyle(self.mb_style)
+        a = QAction("Vérifier les mises à jour…", self)
+        a.triggered.connect(lambda: self.upd.check(manual=True))
+        self.menu_upd.addAction(a)
+        self.act_upd_start = QAction("Vérifier au démarrage", self, checkable=True)
+        self.act_upd_start.setChecked(self.settings.value("update_check", "true") == "true")
+        self.act_upd_start.toggled.connect(
+            lambda on: self.settings.setValue("update_check", "true" if on else "false"))
+        self.menu_upd.addAction(self.act_upd_start)
+        a = QAction("Voir toutes les versions sur GitHub", self)
+        a.triggered.connect(self.open_releases_page)
+        self.menu_upd.addAction(a)
+        if self.act_upd_start.isChecked():
+            QTimer.singleShot(4000, lambda: self.upd.check(manual=False))
+
+        def sc(keys, slot):
+            QShortcut(QKeySequence(keys), self, activated=slot)
+        sc("F12", lambda: self.b_ptt.isEnabled() and self.b_ptt.toggle())
+        sc("Ctrl+Up", lambda: self.tune_by(self.freq.default_step))
+        sc("Ctrl+Down", lambda: self.tune_by(-self.freq.default_step))
+        sc("Ctrl+Shift+Up", lambda: self.tune_by(10 * self.freq.default_step))
+        sc("Ctrl+Shift+Down", lambda: self.tune_by(-10 * self.freq.default_step))
+        sc("PgUp", lambda: self.band_step(+1))
+        sc("PgDown", lambda: self.band_step(-1))
+        sc("Ctrl+M", lambda: self.b_mems.toggle())
+        sc("Ctrl+W", lambda: self.b_wf.toggle())
+        sc("Escape", self.escape)
+        for i in range(5):
+            sc(f"Alt+F{i + 1}", lambda n=i: self.cw.send(self.cw.macros[n].text()))
+        for i in range(4):
+            sc(f"Ctrl+F{i + 1}", lambda n=i: self.dvk.send(n))
+        sc("Ctrl+L", self.focus_log)
+
+    def show_shortcuts(self):
+        QMessageBox.information(self, "Raccourcis clavier", (
+            "F12 : émission (MOX) marche / arrêt\n"
+            "Ctrl + ↑ / ↓ : accord d'un pas\n"
+            "Ctrl + Maj + ↑ / ↓ : accord de 10 pas\n"
+            "Page préc. / Page suiv. : bande suivante / précédente\n"
+            "Ctrl + M : panneau des mémoires\n"
+            "Ctrl + W : chute d'eau marche / arrêt\n"
+            "Alt + F1 à F5 : messages CW programmables\n"
+            "Ctrl + F1 à F4 : messages vocaux\n"
+            "Ctrl + K : mode compact,  Ctrl + N : mode nuit\n"
+            "Ctrl + L : saisir un QSO dans le carnet\n"
+            "Échap : arrêter le scan et la CW\n\n"
+            "Molette sur un chiffre de la fréquence : régler ce chiffre.\n"
+            "Bouton d'accord USB (ShuttleXpress, PowerMate…) : programmez-le dans son "
+            "propre logiciel pour envoyer Ctrl + ↑ et Ctrl + ↓."))
+
+    def band_step(self, d):
+        names = [b[0] for b in BANDS]
+        cur = self.band_of(self.ctrl.snapshot().freq)
+        i = names.index(cur) if cur in names else -1
+        self.goto_band(names[(i + d) % len(names)])
+
+    # --- profils ------------------------------------------------------------------------
+    def refresh_profiles(self, select=None):
+        self.cb_prof.clear()
+        self.cb_prof.addItems(sorted(self.profiles))
+        if select:
+            self.cb_prof.setCurrentText(select)
+
+    def apply_profile(self):
+        prof = self.profiles.get(self.cb_prof.currentText())
+        if not prof or not self.ctrl.connected:
+            return
+        if "freq" in prof:
+            self.ctrl.set_freq(prof["freq"])
+        if "mode" in prof:
+            self.ctrl.set_mode(prof["mode"])
+
+        def params():   # après le changement de mode, certains réglages en dépendent
+            for k in PROFILE_KEYS:
+                if k in prof:
+                    self.ctrl.set_param(k, prof[k])
+            self.statusBar().showMessage(f"Profil « {self.cb_prof.currentText()} » appliqué")
+        QTimer.singleShot(500, params)
+
+    def save_profile(self):
+        if not self.ctrl.connected:
+            QMessageBox.information(self, "Profil", "Connectez d'abord le poste : le profil reprend ses réglages actuels.")
+            return
+        name, ok = QInputDialog.getText(self, "Nouveau profil", "Nom du profil :",
+                                        text=self.cb_prof.currentText())
+        if not ok or not name.strip():
+            return
+        st = self.ctrl.snapshot()
+        prof = {k: st.p[k] for k in PROFILE_KEYS if k in st.p and k not in st.unsupported}
+        if QMessageBox.question(self, "Nouveau profil", "Inclure la fréquence et le mode actuels ?\n\n"
+                                "Non : le profil ne changera que les réglages (puissance, filtres…).") \
+                == QMessageBox.Yes:
+            prof["freq"], prof["mode"] = st.freq, st.mode
+        self.profiles[name.strip()] = prof
+        self.refresh_profiles(name.strip())
+
+    def delete_profile(self):
+        name = self.cb_prof.currentText()
+        if name and QMessageBox.question(self, "Supprimer", f"Supprimer le profil « {name} » ?") == QMessageBox.Yes:
+            self.profiles.pop(name, None)
+            self.refresh_profiles()
+
+    # --- puissance par bande et sécurité TX ---------------------------------------------------
+    def _track_band_power(self, st):
+        band = self.band_of(st.freq)
+        pwr = st.p.get("pwr")
+        if band and band != self._cur_band:
+            if self._cur_band and self._last_pwr:
+                self.pwr_band[self._cur_band] = self._last_pwr
+            self._cur_band = band
+            if self.ck_pwrband.isChecked() and band in self.pwr_band and self.pwr_band[band] != pwr:
+                target = self.pwr_band[band]
+                QTimer.singleShot(0, lambda: self.ctrl.set_param("pwr", target))
+                self.statusBar().showMessage(f"Bande {band} : puissance remise à {target} W")
+                self._last_pwr = target
+                return
+        if band and pwr:
+            self._last_pwr = pwr
+            self.pwr_band[band] = pwr
+
+    def check_tx_timeout(self):
+        st = self._last
+        if not (self.ctrl.connected and st and st.ptt):
+            self._tx_since = None
+            return
+        now = time.monotonic()
+        if self._tx_since is None:
+            self._tx_since = now
+        elif self.sp_tot.value() and now - self._tx_since > self.sp_tot.value() * 60:
+            self.ctrl.set_ptt(False)
+            self._tx_since = None
+            QApplication.beep()
+            self.statusBar().showMessage(f"Sécurité : émission coupée après {self.sp_tot.value()} min")
+
+    # --- chute d'eau : clic pour s'accorder ------------------------------------------------------
+    def on_wf_click(self, audio_hz):
+        digi = getattr(self, "digi", None)
+        if digi and digi.isVisible() and digi.wf_click(audio_hz, self.wf.last_mods):
+            return                                # le panneau numérique prend le clic
+        st = self._last
+        if not (st and self.ctrl.connected) or self.wf.marker is None:
+            return
+        sign = -1 if st.mode in ("LSB", "PKTLSB", "RTTY") else 1
+        rf = st.freq + sign * audio_hz
+        new = int(round((rf - sign * self.wf.marker) / 10) * 10)
+        self.ctrl.set_freq(new)
+
+    # --- marche / arrêt du poste -------------------------------------------------------------------
+    def power_on_connect(self):
+        if self.ctrl.connected:
+            self.statusBar().showMessage("Le poste est déjà connecté et allumé")
+            return
+        keep = self.ck_on.isChecked()
+        self.ck_on.setChecked(True)
+        self.toggle_connection()
+        self.ck_on.setChecked(keep)
+
+    def power_off_disconnect(self):
+        if self.ctrl.connected and QMessageBox.question(self, "Éteindre", f"Éteindre le {self.ctrl.driver.name} ?") == QMessageBox.Yes:
+            self.ctrl.disconnect_rig(power_off=True)
+
+    # --- sauvegarde des menus -------------------------------------------------------------------------
+    def open_backup_dir(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(backup_dir()))
+
+    def backup_menus(self):
+        if not self.ctrl.connected:
+            QMessageBox.information(self, "Sauvegarde", "Connectez d'abord le poste.")
+            return
+        self._want_backup = True
+        self.ctrl.job("read_menus")
+
+    def restore_menus(self):
+        if not self.ctrl.connected:
+            QMessageBox.information(self, "Restauration", "Connectez d'abord le poste.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Restaurer une sauvegarde", backup_dir(), "Sauvegarde (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            menus = {str(k): str(v) for k, v in data["menus"].items()}
+        except Exception as e:
+            QMessageBox.warning(self, "Fichier illisible", f"Ce fichier n'est pas une sauvegarde CAT Pilot.\n\n{e}")
+            return
+        mems = data.get("memoires", [])
+        txt = (f"Sauvegarde du {data.get('date', '?')} : {len(menus)} menus"
+               + (f" et {len(mems)} mémoires." if mems else ".")
+               + "\n\nSeuls les menus différents seront réécrits. Les menus CAT (031 à 033) "
+                 "ne sont jamais modifiés, pour ne pas couper la liaison.\n\nRestaurer les menus ?")
+        rig = self.ctrl.driver.name
+        if data.get("poste") and data["poste"] != rig:
+            txt = f"Attention : cette sauvegarde vient d'un {data['poste']}, le poste connecté est un {rig}.\n\n" + txt
+        if QMessageBox.question(self, "Restaurer les menus", txt) != QMessageBox.Yes:
+            return
+        self._want_restore = True
+        self._restore_mems = mems if mems and QMessageBox.question(
+            self, "Mémoires", f"Restaurer aussi les {len(mems)} mémoires de la sauvegarde ?") == QMessageBox.Yes else []
+        self.ctrl.job("write_menus", menus)
+
+    def on_job(self, name, res):
+        if isinstance(res, Exception):
+            if name in ("read_menus", "write_menus", "power_on"):
+                QMessageBox.warning(self, "Erreur", f"{name} : {res}")
+            return
+        if name == "read_menus" and self._want_backup:
+            self._want_backup = False
+            if not res:
+                QMessageBox.warning(self, "Sauvegarde", "Le poste n'a renvoyé aucun menu.")
+                return
+            stamp = datetime.datetime.now()
+            rig = self.ctrl.driver.name.replace("Yaesu ", "").replace(" ", "").replace("/", "-")
+            default = os.path.join(backup_dir(), f"sauvegarde_{rig}_{stamp:%Y-%m-%d_%H%M}.json")
+            path, _ = QFileDialog.getSaveFileName(self, "Enregistrer la sauvegarde", default, "Sauvegarde (*.json)")
+            if not path:
+                return
+            data = {"poste": self.ctrl.driver.name, "logiciel": f"CAT Pilot {__version__}",
+                    "date": f"{stamp:%d/%m/%Y %H:%M}",
+                    "menus": dict(sorted(res.items())),
+                    "memoires": [{k: v for k, v in m.items()} for m in self.mem.read_copy]}
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            extra = (f" et {len(self.mem.read_copy)} mémoires" if self.mem.read_copy
+                     else " (mémoires non incluses : lisez-les d'abord pour les ajouter)")
+            QMessageBox.information(self, "Sauvegarde terminée", f"{len(res)} menus{extra} enregistrés dans\n{path}")
+        elif name == "write_menus" and self._want_restore:
+            self._want_restore = False
+            msg = (f"Menus modifiés : {len(res['changed'])}\nDéjà identiques : {res['same']}\n"
+                   f"Non modifiables ou en échec : {len(res['failed'])}")
+            if res["failed"]:
+                msg += " (" + ", ".join(res["failed"][:20]) + ")"
+            QMessageBox.information(self, "Restauration des menus", msg)
+            mems = getattr(self, "_restore_mems", [])
+            if mems:
+                template = (self.mem.read_copy or mems)[0].get("raw", "")
+                self.ctrl.job("write_memories", mems, template)
+                self._restore_mems = []
+
+    # --- adaptation au poste ------------------------------------------------------------------
+    def _adapt_to_rig(self, drv):
+        if not drv:
+            return
+        self.setWindowTitle(f"CAT Pilot FT-817 {__version__} — {drv.name if drv.name != 'Simulateur' else 'simulateur'}")
+        maxf = getattr(drv, "max_freq", 470_000_000)
+        minf = getattr(drv, "min_freq", 0)
+        for name, lo, hi, _d in BANDS:
+            self.band_buttons[name].setVisible(lo <= maxf and hi >= minf)
+        if hasattr(self, "mem"):
+            self.mem.adapt(drv)
+        if hasattr(self, "compact"):
+            self.compact.fill_modes(drv.modes + (["C4FM"] if getattr(drv, "has_c4fm", False) else []))
+        for mode, b in self.mode_buttons.items():
+            b.setVisible(mode in drv.modes or (mode == "C4FM" and getattr(drv, "has_c4fm", False)))
+        self._adapt_controls(drv)
+        for b in (self.b_qmb_sto, self.b_qmb_rcl):
+            b.setVisible(getattr(drv, "has_qmb", True))
+        top = getattr(drv, "max_power", 100)
+        sl = self.sliders["pwr"][0]
+        sl.setRange(1 if top < 20 else 5, top)
+        self.ck_on.setToolTip("Le poste doit rester alimenté et relié en USB")
+        if not getattr(drv, "has_usb_audio", True):
+            self.cb_audio.setToolTip("Ce poste n'a pas de carte son USB : choisissez l'entrée de votre "
+                                     "interface audio (SCU-17, Signalink…)")
+
+    def _adapt_controls(self, drv):
+        """Masque ce que le CAT du poste ne permet pas de piloter (FT-817/857/897 : presque tout
+        se règle sur le poste ; seuls fréquence, mode, PTT, split, clarifier, relais et tonalité passent)."""
+        cat = getattr(drv, "cat_params", None)
+        ok = (lambda k: True) if cat is None else (lambda k: k in cat)
+        for name in ("rf", "cw", "rx", "filters"):
+            self.panels[name].setVisible(cat is None)
+        for key, w in self.vslider_widgets.items():
+            w.setVisible(ok(key))
+        for key in ("vox", "proc"):
+            self.toggles[key].setVisible(ok(key))
+        self.lb_txhint.setVisible(cat is not None)
+        self.act_pwrband.setVisible(ok("pwr"))
+        self.b_lock.setVisible(getattr(drv, "has_lock", False))
+        self.b_vm.setVisible(getattr(drv, "has_vm", True))
+        self.b_txclar.setVisible(getattr(drv, "has_tx_clar", True))
+        menus = getattr(drv, "has_menus", True)
+        for a in self.menu_actions:
+            a.setVisible(menus)
+        if hasattr(self, "b_txa"):
+            act = getattr(self, "dock_actions", {}).get(self.b_txa)
+            (act or self.b_txa).setVisible(menus)
+            if not menus and self.b_txa.isChecked():
+                self.b_txa.setChecked(False)
+        self.main_grid.setRowStretch(2, 2 if cat is None else 0)
+        if hasattr(self, "cw"):
+            self.cw.adapt(drv)
+
+    # --- carnet, spots, rotor -----------------------------------------------------------------
+    def _reload_worked(self):
+        with self.log.lock:
+            rows = self.log.db.execute("SELECT DISTINCT call, band FROM qso").fetchall()
+        self._worked = {r[0] for r in rows}
+        self.log_gen = getattr(self, "log_gen", 0) + 1         # les spots recalculent leur couleur
+        self._entities = None
+        self._confirmed = None
+
+    def upload_dialog(self):
+        from .awards import UploadDialog
+        UploadDialog(self).exec()
+
+    def awards_dialog(self):
+        from .awards import AwardsDialog
+        AwardsDialog(self).exec()
+
+    def _auto_upload(self, qid):
+        from .upload import SERVICES
+        for svc in SERVICES:
+            if self.uploader.auto(svc):
+                self.uploader.send(svc, [qid])
+
+    def _upload_done(self, svc, ok, err):
+        from .upload import SERVICES
+        if ok or err:
+            self.statusBar().showMessage(f"{SERVICES[svc]} : {ok} QSO envoyé{'s' if ok > 1 else ''}"
+                                         + (f", {err} en erreur" if err else ""), 10000)
+
+    # --- confort : affichage, voix, dispositions -----------------------------------------------------
+    def _build_extras(self):
+        from .extras import FreqAnnouncer, Layouts, QsyHistory, Speaker, StatusInfo
+        s = self.settings
+        self.speaker = Speaker()
+        self.status_info = StatusInfo(self)
+        self.qsy = QsyHistory(self, self.b_recent)
+        self.announcer = FreqAnnouncer(self, self.speaker)
+        self.announcer.enabled = s.value("speak_freq", "false") in (True, "true")
+        self.speak_alerts = s.value("speak_alerts", "false") in (True, "true")
+        from .backup import Backup
+        self.backup = Backup(self)
+        self.backup.status.connect(lambda m: self.statusBar().showMessage(m, 10000))
+        from .scheduler import Scheduler
+        self.scheduler = Scheduler(self)
+        from .antennas import Antennas
+        self.antennas = Antennas(self)
+        a5 = QAction("Profils d'antenne (antenne, puissance max par bande)…", self)
+        a5.triggered.connect(self.antenna_dialog)
+        self.menu_poste.addAction(a5)
+        a3 = QAction("Reconnexion automatique si la liaison est perdue", self, checkable=True)
+        a3.setChecked(s.value("auto_reconnect", "true") in (True, "true"))
+        a3.toggled.connect(lambda on: self.settings.setValue("auto_reconnect", "true" if on else "false"))
+        self.menu_poste.addSeparator()
+        self.menu_poste.addAction(a3)
+        a4 = QAction("Ouvrir le journal de la liaison CAT", self)
+        a4.triggered.connect(self.open_cat_log)
+        self.menu_poste.addAction(a4)
+        a2 = QAction("Analyseur de SWR (balayage d'une bande)…", self)
+        a2.triggered.connect(self.swr_dialog)
+        self.menu_poste.addAction(a2)
+        a = QAction("Programmateur (réglage à heure fixe)…", self)
+        a.triggered.connect(self.scheduler_dialog)
+        self.menu_poste.addSeparator()
+        self.menu_poste.addAction(a)
+        aff = self.menu_aff
+        aff.addSeparator()
+        a = QAction("Grand panoramique (chute d'eau détachable)", self)
+        a.triggered.connect(lambda: self.b_bigwf.setChecked(True))
+        aff.addAction(a)
+        m = aff.addMenu("Hauteur de la chute d'eau")
+        grp = QActionGroup(self)
+        self.wf_size = s.value("wf_size", "normale") or "normale"
+        for key, label in (("petite", "Petite"), ("normale", "Normale"), ("grande", "Grande")):
+            a = QAction(label, self, checkable=True)
+            a.setChecked(key == self.wf_size)
+            a.triggered.connect(lambda _c=False, k=key: self.set_wf_size(k))
+            grp.addAction(a)
+            m.addAction(a)
+        m = aff.addMenu("Taille de l'afficheur de fréquence")
+        grp = QActionGroup(self)
+        self.freq_size = int(s.value("freq_size", 100))
+        for pct in (100, 125, 150, 175):
+            a = QAction(f"{pct} %", self, checkable=True)
+            a.setChecked(pct == self.freq_size)
+            a.triggered.connect(lambda _c=False, v=pct: self.set_freq_size(v))
+            grp.addAction(a)
+            m.addAction(a)
+        self.layouts = Layouts(self, aff.addMenu("Dispositions des panneaux"))
+        self.act_full = QAction("Plein écran (gros boutons)", self, checkable=True)
+        self.act_full.setShortcut("F11")
+        self.act_full.toggled.connect(self.set_fullscreen)
+        aff.addAction(self.act_full)
+        voice = aff.addMenu("Annonces vocales")
+        a = QAction("Fréquence et mode après chaque réglage", self, checkable=True)
+        a.setChecked(self.announcer.enabled)
+        a.toggled.connect(lambda on: setattr(self.announcer, "enabled", on))
+        voice.addAction(a)
+        a = QAction("Annoncer maintenant (fréquence, mode, S-mètre)", self)
+        a.setShortcut("F9")
+        a.triggered.connect(self.announce_now)
+        voice.addAction(a)
+        self.addAction(a)
+        a = QAction("Bande et antenne à chaque changement de bande", self, checkable=True)
+        a.setChecked(s.value("speak_band", "false") in (True, "true"))
+        a.toggled.connect(lambda on: self.settings.setValue("speak_band", "true" if on else "false"))
+        voice.addAction(a)
+        a = QAction("Alertes du DX cluster", self, checkable=True)
+        a.setChecked(self.speak_alerts)
+        a.toggled.connect(lambda on: setattr(self, "speak_alerts", on))
+        voice.addAction(a)
+        palerts = aff.addMenu("Alertes de propagation")
+        for key, label in (("alert_es", "Ouverture du 6 m (sporadique E, d'après hamqsl et le DX cluster)"),
+                           ("alert_aurora", "Aurore et orage magnétique (indice K ≥ 5)")):
+            a = QAction(label, self, checkable=True)
+            a.setChecked(s.value(key, "true") in (True, "true"))
+            a.toggled.connect(lambda on, k=key: self.settings.setValue(k, "true" if on else "false"))
+            palerts.addAction(a)
+        a = QAction("Essayer la voix", self)
+        a.triggered.connect(lambda: self.speaker.say("CAT Pilot, annonces vocales actives. 73."))
+        voice.addAction(a)
+        st = s.value("dock_state", "")
+        if st:
+            try:
+                self.restoreState(QByteArray(base64.b64decode(st)))
+            except Exception:
+                pass
+        self.set_wf_size(self.wf_size)
+        self.set_freq_size(self.freq_size)
+
+    def swr_dialog(self):
+        if not self.ctrl.connected:
+            QMessageBox.information(self, "Analyseur de SWR", "Connectez d'abord le poste.")
+            return
+        from .swrscan import SwrDialog
+        SwrDialog(self).exec()
+
+    def backup_dialog(self):
+        from .backup import BackupDialog
+        BackupDialog(self).exec()
+
+    def scheduler_dialog(self):
+        from .backup import Backup
+        self.backup = Backup(self)
+        self.backup.status.connect(lambda m: self.statusBar().showMessage(m, 10000))
+        from .scheduler import SchedulerDialog
+        SchedulerDialog(self).exec()
+
+    def set_wf_size(self, key):
+        self.wf_size = key
+        self.wf.setMinimumHeight({"petite": 70, "normale": 100, "grande": 230}.get(key, 100))
+
+    def set_freq_size(self, pct):
+        self.freq_size = pct
+        self.freq.setStyleSheet("" if pct == 100 else f"font-size: {38 * self.text_scale() * pct / 100:.0f}pt;")
+
+    def set_fullscreen(self, on):
+        if on:
+            self._scale_before = self.size_group.checkedAction()
+            big = next((a for a in self.size_group.actions() if abs(a.data() - 1.3) < 0.01), None)
+            if big:
+                big.setChecked(True)
+            self.apply_look()
+            QApplication.instance().setStyleSheet(QApplication.instance().styleSheet() +
+                                                  "QPushButton { min-height: 34px; }")
+            self.showFullScreen()
+        else:
+            if getattr(self, "_scale_before", None):
+                self._scale_before.setChecked(True)
+            self.apply_look()
+            self.showNormal()
+        self.set_freq_size(self.freq_size)
+
+    def antenna_dialog(self):
+        from .antennas import AntennaDialog
+        AntennaDialog(self).exec()
+
+    def announce_now(self):
+        st = self._last
+        if not st or not self.ctrl.connected:
+            self.speaker.say("Poste non connecté")
+            return
+        from .extras import MODE_SPOKEN, spoken_freq
+        txt = f"{spoken_freq(st.freq)}, {MODE_SPOKEN.get(st.mode, st.mode)}"
+        if st.ptt:
+            txt += ", en émission"
+        elif getattr(st, "s_text", ""):
+            txt += f", signal {st.s_text.replace('+', ' plus ')}"
+        if "pwr" in st.p:
+            txt += f", puissance {st.p['pwr']} watts"
+        self.speaker.say(txt)
+
+    def check_openings(self, data):
+        from .propagation import openings
+        s = self.settings
+        on = {"es": s.value("alert_es", "true"), "aurora": s.value("alert_aurora", "true"),
+              "storm": s.value("alert_aurora", "true")}
+        seen = getattr(self, "_openings_seen", {})
+        now = time.time()
+        for kind, text in openings(data):
+            if on.get(kind) not in (True, "true") or now - seen.get(kind, 0) < 3 * 3600:
+                continue
+            seen[kind] = now
+            self.propagation_alert(text)
+        self._openings_seen = seen
+
+    def propagation_alert(self, text):
+        self.statusBar().showMessage(f"Propagation : {text}", 60000)
+        QApplication.beep()
+        if self.speak_alerts:
+            self.speaker.say(f"Propagation. {text.split('(')[0]}")
+        self._prop_alert_text = text
+
+    def say_alert(self, sp, why):
+        if self.speak_alerts:
+            call = " ".join(sp["call"])
+            from .extras import spoken_freq
+            self.speaker.say(f"Alerte. {call}, {spoken_freq(sp['hz'])}. {why}")
+
+    def worked_entities(self):
+        """Pays DXCC déjà contactés : {préfixe : {bandes}}."""
+        if self._entities is None:
+            from . import cty
+            with self.log.lock:
+                rows = self.log.db.execute("SELECT DISTINCT call, band FROM qso").fetchall()
+            ent = {}
+            for call, band in rows:
+                e = cty.dxcc(call or "")
+                if e:
+                    ent.setdefault(e["prefix"], set()).add(band or "")
+            self._entities = ent
+        return self._entities
+
+    def confirmed_entities(self):
+        """Pays DXCC confirmés (carte, eQSL ou LoTW)."""
+        if getattr(self, "_confirmed", None) is None:
+            from . import cty
+            with self.log.lock:
+                rows = self.log.db.execute("SELECT DISTINCT call FROM qso WHERE lotw_qsl_rcvd = 'Y' OR "
+                                           "eqsl_qsl_rcvd = 'Y' OR qsl_rcvd = 'Y'").fetchall()
+            self._confirmed = {e["prefix"] for (c,) in rows for e in [cty.dxcc(c or "")] if e}
+        return self._confirmed
+
+    def worked_before(self, call):
+        return call.upper() in self._worked
+
+    def prefill_log(self, call, ref="", mode=None):
+        self.b_log.setChecked(True)
+        self.logdock.prefill(call, ref, mode)
+
+    def focus_log(self):
+        self.b_log.setChecked(True)
+        self.logdock.raise_()
+        self.logdock.ed_call.setFocus()
+
+    def set_active_call(self, call):
+        """Indicatif utilisé pour les prochains QSO (F4JCF, F4JCF/P, FR/F4JCF/P…), mémorisé dans la liste."""
+        import json
+        from .logbook import CALL_RE, my_calls
+        call = (call or "").strip().upper().replace(" ", "")
+        if not call:
+            return
+        if not CALL_RE.match(call):
+            QMessageBox.warning(self, "Indicatif", f"« {call} » ne ressemble pas à un indicatif "
+                                "(exemples : F4JCF, F4JCF/P, FR/F4JCF/P).")
+            self.logdock.fill_mycalls()
+            return
+        s = self.settings
+        calls = my_calls(s)
+        if call not in calls:
+            calls.append(call)
+        s.setValue("mycalls", json.dumps(calls))
+        s.setValue("mycall", call)
+        self.cw.ed_mycall.setText(call)
+        self.logdock.fill_mycalls()
+        self.statusBar().showMessage(f"Prochains QSO enregistrés avec l'indicatif {call}", 8000)
+
+    def remove_call(self, call):
+        import json
+        from .logbook import my_calls
+        call = (call or "").strip().upper()
+        s = self.settings
+        calls = [c for c in my_calls(s) if c != call]
+        s.setValue("mycalls", json.dumps(calls))
+        if (s.value("mycall", "") or "").upper() == call:
+            s.setValue("mycall", calls[0] if calls else "")
+            self.cw.ed_mycall.setText(calls[0] if calls else "")
+        self.logdock.fill_mycalls()
+
+    def qsl_labels(self, recs=None):
+        from .qslprint import LabelDialog
+        LabelDialog(self, recs).exec()
+
+    def qsl_sync_now(self):
+        if not any(self.qsl_sync.configured().values()):
+            QMessageBox.information(self, "Confirmations", "Renseignez votre compte eQSL et/ou votre identifiant du "
+                                    "site LoTW dans Carnet > Envoi en ligne, puis recommencez.")
+            self.upload_dialog()
+            return
+        if not self.qsl_sync.run():
+            self.statusBar().showMessage("Relevé des confirmations déjà en cours…", 5000)
+
+    def log_settings(self):
+        d = HamQTHDialog(self)
+        if d.exec() != QDialog.Accepted:
+            return
+        s = self.settings
+        if d.ed_call.text().strip():
+            self.set_active_call(d.ed_call.text())
+        s.setValue("hamqth_user", d.ed_user.text().strip())
+        s.setValue("hamqth_pass", d.ed_pass.text())
+        self.logdock.hamqth.user = d.ed_user.text().strip()
+        self.logdock.hamqth.password = d.ed_pass.text()
+        self.logdock.hamqth.session = None
+        s.setValue("qrz_user", d.ed_qrz_user.text().strip())
+        s.setValue("qrz_pass", d.ed_qrz_pass.text())
+        self.logdock.hamqth.qrz_user = d.ed_qrz_user.text().strip()
+        self.logdock.hamqth.qrz_password = d.ed_qrz_pass.text()
+        self.logdock.hamqth.qrz_session = None
+        s.setValue("qrzcq_user", d.ed_qrzcq_user.text().strip())
+        s.setValue("qrzcq_pass", d.ed_qrzcq_pass.text())
+        self.logdock.hamqth.qrzcq_user = d.ed_qrzcq_user.text().strip()
+        self.logdock.hamqth.qrzcq_password = d.ed_qrzcq_pass.text()
+        self.logdock.hamqth.qrzcq_session = None
+        self.logdock.hamqth.cache.clear()
+        self.cw.ed_mycall.setText(d.ed_call.text().strip().upper())
+
+    def point_rotor_to_grid(self, grid):
+        rot = getattr(self, "rotor", None)
+        if rot and rot.follow_spots():
+            rot.point_to_grid(grid)
+
+    # --- apparence -------------------------------------------------------------------------
+    def text_scale(self):
+        a = self.size_group.checkedAction()
+        return a.data() if a else 1.0
+
+    def apply_look(self):
+        night = self.act_night.isChecked()
+        apply_theme(QApplication.instance(), "nuit" if night else "jour", self.text_scale())
+        self.bandplan.dim = night
+
+    def change_language(self, code):
+        if code == self.settings.value("lang", "fr"):
+            return
+        self.settings.setValue("lang", code)
+        box = QMessageBox(self)
+        box.setWindowTitle("Langue")
+        box.setText("La langue sera changée au prochain démarrage de CAT Pilot.")
+        now = box.addButton("Redémarrer maintenant", QMessageBox.AcceptRole)
+        box.addButton("Plus tard", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is now:
+            from .updater import restart
+            self._restart_for_update = True          # simple redémarrage : le poste reste allumé
+            restart()
+            self.close()
+
+    def show_compact(self):
+        self.compact.show()
+        self.compact.raise_()
+        self.compact.on_state(self.ctrl.snapshot())
+        self.hide()
+
+    def restore_from_compact(self):
+        self.compact.hide()
+        self.show()
+        self.raise_()
+
+    # --- émission hors bande ------------------------------------------------------------------
+    def _check_out_of_band(self, st):
+        if not st.ptt:
+            self._oob_warned = False
+            return
+        if self.band_of(st.freq) or getattr(self, "_oob_warned", False):
+            return
+        self._oob_warned = True
+        QApplication.beep()
+        f = f"{st.freq / 1e6:.4f} MHz".replace(".", ",")
+        if self.act_oob.isChecked():
+            self.ctrl.set_ptt(False)
+            self.statusBar().showMessage(f"Émission coupée : {f} est hors des bandes amateurs "
+                                         "(option dans le menu Poste)")
+        else:
+            self.statusBar().showMessage(f"Attention : émission sur {f}, hors des bandes amateurs")
+
+    # --- position de la station ----------------------------------------------------------------
+    def set_station(self, lat, lon, source):
+        self.station = (lat, lon)
+        self.station_src = source
+        loc = to_locator(lat, lon)
+        self.b_loc.setText(loc + ("  GPS" if "GPS" in source else ""))
+        self.b_loc.setToolTip(f"{loc} — {lat:.4f}°, {lon:.4f}° ({source}). Clic : régler")
+        if getattr(self, "mapdock", None):
+            self.mapdock.update_layers()
+
+    def load_position(self):
+        self.station, self.station_src = None, ""
+        loc = self.settings.value("my_locator", "")
+        try:
+            if loc:
+                self.set_station(*from_locator(loc), "locator saisi")
+        except ValueError:
+            pass
+        self.nmea.stop()
+        if self.settings.value("pos_source", "manuel") == "nmea":
+            port = self.settings.value("nmea_port", "")
+            if port:
+                self.nmea.start(port, int(self.settings.value("nmea_baud", 4800)))
+
+    def position_dialog(self):
+        d = QDialog(self)
+        d.setWindowTitle("Position de la station")
+        v = QVBoxLayout(d)
+        r_man = QRadioButton("Locator saisi")
+        ed = QLineEdit(self.settings.value("my_locator", ""))
+        ed.setPlaceholderText("ex. JN33LP")
+        r_rig = QRadioButton("GPS du poste (IC-705)")
+        r_nmea = QRadioButton("GPS NMEA sur un port COM (GPS USB, sortie GPS de l'IC-705…)")
+        cb_port = QComboBox()
+        for p in sorted(serial.tools.list_ports.comports(), key=lambda p: p.device):
+            cb_port.addItem(f"{p.device} — {p.description}", p.device)
+        i = cb_port.findData(self.settings.value("nmea_port", ""))
+        if i >= 0:
+            cb_port.setCurrentIndex(i)
+        cb_baud = QComboBox()
+        cb_baud.addItems(["4800", "9600", "38400", "115200"])
+        cb_baud.setCurrentText(str(self.settings.value("nmea_baud", "4800")))
+        src = self.settings.value("pos_source", "manuel")
+        {"manuel": r_man, "poste": r_rig, "nmea": r_nmea}.get(src, r_man).setChecked(True)
+        v.addWidget(r_man)
+        v.addWidget(ed)
+        v.addWidget(r_rig)
+        v.addWidget(r_nmea)
+        h = QHBoxLayout()
+        h.addWidget(cb_port, 1)
+        h.addWidget(cb_baud)
+        v.addLayout(h)
+        t = QLabel("Le locator saisi sert aussi de position de secours quand le GPS n'a pas de position.")
+        t.setObjectName("hint")
+        t.setWordWrap(True)
+        v.addWidget(t)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        v.addWidget(bb)
+        if d.exec() != QDialog.Accepted:
+            return
+        loc = ed.text().strip()
+        if loc:
+            try:
+                from_locator(loc)
+            except ValueError:
+                QMessageBox.warning(self, "Position", f"« {loc} » n'est pas un locator valide (ex. JN33LP).")
+                return
+        self.settings.setValue("my_locator", loc)
+        self.settings.setValue("pos_source", "poste" if r_rig.isChecked() else "nmea" if r_nmea.isChecked() else "manuel")
+        self.settings.setValue("nmea_port", cb_port.currentData() or "")
+        self.settings.setValue("nmea_baud", cb_baud.currentText())
+        self.load_position()
+
+    def escape(self):
+        if self.mem.scanning:
+            self.mem.b_scan.setChecked(False)
+        self.cw.stop()
+        self.dvk.stop()
+        self.digi.ftx.halt()
+        self.digi.tx.stop()
+
+    def open_menu_editor(self, flt):
+        if not self.ctrl.connected:
+            QMessageBox.information(self, "Menus", "Connectez d'abord le poste.")
+            return
+        MenuEditor(self, flt).show()
+
+    # --- horloge et propagation ----------------------------------------------------------------
+    def update_clock(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        local = datetime.datetime.now()
+        self.lb_utc.setText(f"UTC {now:%H:%M:%S}  ({local:%H:%M})")
+
+    def on_propagation(self, data):
+        if isinstance(data, Exception):
+            self.b_prop.setText("Propagation : indisponible")
+            self.b_prop.setToolTip(f"Données hamqsl.com inaccessibles ({data}). Clic : réessayer")
+            return
+        day = 7 <= datetime.datetime.now().hour < 19
+        when = "day" if day else "night"
+        colors = {"Good": GREEN, "Fair": AMBER, "Poor": RED}
+        bands = []
+        for name in ("80m-40m", "30m-20m", "17m-15m", "12m-10m"):
+            cond = data["bands"].get((name, when), "")
+            short = name.replace("m-", "-").replace("m", "")
+            bands.append(f"{short} <span style='color:{colors.get(cond, TEXT)}'>●</span>")
+        k = data.get("kindex", "?")
+        self.check_openings(data)
+        self.b_prop.setText("")
+        lbl = getattr(self, "_prop_label", None)
+        if lbl is None:
+            lbl = self._prop_label = QLabel(self.b_prop)
+            lbl.setTextFormat(Qt.RichText)
+            lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+            lay = QHBoxLayout(self.b_prop)
+            lay.setContentsMargins(4, 0, 4, 0)
+            lay.addWidget(lbl)
+        lbl.setText(f"SFI <b>{data.get('solarflux', '?')}</b>&nbsp; A <b>{data.get('aindex', '?')}</b>&nbsp; "
+                    f"K <b>{k}</b>&nbsp; SN <b>{data.get('sunspots', '?')}</b>&nbsp;&nbsp; "
+                    + "&nbsp; ".join(bands) + f"&nbsp; <span style='color:#8a8a8a'>({'jour' if day else 'nuit'})</span>")
+        self.b_prop.setMinimumWidth(lbl.sizeHint().width() + 10)
+        details = "\n".join(f"{n.replace('m-', '-')} : jour {PROP_FR.get(data['bands'].get((n, 'day'), ''), '?')}, "
+                             f"nuit {PROP_FR.get(data['bands'].get((n, 'night'), ''), '?')}"
+                             for n in ("80m-40m", "30m-20m", "17m-15m", "12m-10m"))
+        self.b_prop.setToolTip(f"Flux solaire {data.get('solarflux')}, indice A {data.get('aindex')}, "
+                               f"indice K {k}, taches {data.get('sunspots')}, rayons X {data.get('xray')}\n"
+                               f"Champ géomagnétique : {data.get('geomagfield')}, bruit : {data.get('signalnoise')}\n\n"
+                               f"{details}\n\nSource hamqsl.com (N0NBH), mise à jour {data.get('updated')}.\n"
+                               "Clic : actualiser")
+
+    # --- enregistrement ------------------------------------------------------------------------------
+    def toggle_recording(self, on):
+        if on:
+            if not self.wf.running:
+                self.b_wf.setChecked(True)
+                if not self.wf.running:
+                    self._uncheck(self.b_rec)
+                    return
+            st = self._last
+            d = os.path.join(os.path.expanduser("~"), "Documents", "CATPilot-FT817", "enregistrements")
+            os.makedirs(d, exist_ok=True)
+            tag = f"_{st.freq // 1000}kHz_{MODE_LABELS.get(st.mode, st.mode)}" if st and self.ctrl.connected else ""
+            path = os.path.join(d, f"RX_{datetime.datetime.now():%Y%m%d_%H%M%S}{tag}.wav")
+            try:
+                self.wf.start_recording(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Enregistrement", f"Impossible de créer le fichier.\n\n{e}")
+                self._uncheck(self.b_rec)
+                return
+            self.statusBar().showMessage(f"Enregistrement en cours : {path}")
+        else:
+            path = self.wf.rec_path
+            secs = int(self.wf.rec_seconds)
+            self.wf.stop_recording()
+            if path:
+                self.statusBar().showMessage(f"Enregistrement terminé ({secs} s) : {path}")
+
+    @staticmethod
+    def _uncheck(btn):
+        btn.blockSignals(True)
+        btn.setChecked(False)
+        btn.blockSignals(False)
+
+    # --- mises à jour ------------------------------------------------------------------------
+    def set_update_flag(self, available, version=""):
+        """Titre « Mise à jour » en orange tant qu'une nouvelle version attend."""
+        self.mb_style.highlight_menu = self.menu_upd if available else None
+        self.menu_upd.menuAction().setToolTip(f"Nouvelle version disponible : {version}" if available else "")
+        self.menuBar().update()
+
+    def open_releases_page(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(RELEASES_PAGE))
+
+    def on_update_checked(self, info, manual):
+        if isinstance(info, Exception):
+            if manual:
+                QMessageBox.warning(self, "Mise à jour",
+                                    f"Impossible de vérifier les mises à jour.\n\n{info}")
+            return
+        if not is_newer(info["version"]):
+            self.set_update_flag(False)
+            if manual:
+                QMessageBox.information(self, "Mise à jour",
+                                        f"Vous avez déjà la dernière version ({__version__}).")
+            return
+        if not manual and self.settings.value("update_skip", "") == info["version"]:
+            self.set_update_flag(True, info["version"])
+            return
+        self.set_update_flag(True, info["version"])
+        self.statusBar().showMessage(f"Nouvelle version disponible : {info['version']}")
+        notes = info["notes"].strip()
+        if len(notes) > 900:
+            notes = notes[:900] + "…"
+        box = QMessageBox(self)
+        box.setWindowTitle("Mise à jour disponible")
+        box.setText(f"<b>CAT Pilot {info['version']}</b> est disponible (vous avez la {__version__}).")
+        box.setInformativeText((notes + "\n\n" if notes else "") +
+                               ("Le logiciel sera fermé, mis à jour puis relancé automatiquement."
+                                if can_self_update() else
+                                "Mise à jour automatique possible uniquement avec CATPilot-FT817.exe : "
+                                "la page de téléchargement va s'ouvrir."))
+        b_now = box.addButton("Mettre à jour maintenant", QMessageBox.AcceptRole)
+        b_later = box.addButton("Plus tard", QMessageBox.RejectRole)
+        b_skip = box.addButton("Ignorer cette version", QMessageBox.DestructiveRole) if not manual else None
+        box.setDefaultButton(b_now)
+        box.exec()
+        if box.clickedButton() is b_skip:
+            self.settings.setValue("update_skip", info["version"])
+            return
+        if box.clickedButton() is not b_now:
+            return
+        if not can_self_update() or not info.get("url"):
+            self.open_releases_page()
+            return
+        if self._last and self._last.ptt:
+            QMessageBox.warning(self, "Mise à jour", "Le poste est en émission : réessayez après.")
+            return
+        from PySide6.QtWidgets import QProgressDialog
+        self._upd_dialog = QProgressDialog(f"Téléchargement de CAT Pilot {info['version']}…",
+                                           "Annuler", 0, 100, self)
+        self._upd_dialog.setWindowTitle("Mise à jour")
+        self._upd_dialog.setWindowModality(Qt.WindowModal)
+        self._upd_dialog.setMinimumDuration(0)
+        self._upd_dialog.canceled.connect(self.upd.cancel)
+        self._upd_dialog.setValue(0)
+        self.upd.download(info)
+
+    def on_update_progress(self, done, total):
+        dlg = self._upd_dialog
+        if dlg and total:
+            dlg.setLabelText(f"Téléchargement… {done / 1e6:.1f} / {total / 1e6:.1f} Mo")
+            dlg.setValue(min(99, int(done * 100 / total)))
+
+    def on_update_downloaded(self, path):
+        if self._upd_dialog:
+            self._upd_dialog.reset()
+            self._upd_dialog = None
+        if isinstance(path, Exception):
+            if "annulé" not in str(path):
+                QMessageBox.warning(self, "Mise à jour", f"Le téléchargement a échoué.\n\n{path}")
+            return
+        try:
+            install_and_restart(path)
+        except Exception as e:
+            QMessageBox.warning(self, "Mise à jour", f"L'installation n'a pas pu démarrer.\n\n{e}")
+            return
+        self._restart_for_update = True       # ne pas éteindre le poste pour un simple redémarrage
+        self.statusBar().showMessage("Mise à jour : redémarrage de CAT Pilot…")
+        self.close()
+
+    # --- serveur -----------------------------------------------------------------------
+    def toggle_server(self, on):
+        if on:
+            try:
+                self.server = RigctlServer(self.ctrl, self.sp_port.value())
+                self.server.start()
+            except OSError as e:
+                self.server = None
+                QMessageBox.warning(self, "Serveur indisponible",
+                                    f"Le port TCP {self.sp_port.value()} est déjà utilisé.\n\n{e}")
+                self.ck_srv.blockSignals(True)
+                self.ck_srv.setChecked(False)
+                self.ck_srv.blockSignals(False)
+                return
+        elif self.server:
+            self.server.stop()
+            self.server = None
+        self.sp_port.setEnabled(not on)
+        self.update_clients()
+
+    def update_clients(self):
+        if not self.server:
+            self.lb_clients.setText("arrêté")
+        else:
+            n = self.server.clients
+            self.lb_clients.setText(f"{n} logiciel connecté" if n < 2 else f"{n} logiciels connectés")
+
+    # --- affichage de l'état -------------------------------------------------------------
+    def on_state(self, st):
+        if not self.ctrl.connected:
+            return
+        self._last = st
+        self._state_time = time.monotonic()
+        for hook in (self.status_info.on_state, self.qsy.on_state, self.announcer.on_state, self.antennas.on_state):
+            hook(st)
+        self.bandplan.set_freq(st.freq, st.ptt)
+        self._check_out_of_band(st)
+        gps = st.p.get("gps")
+        if gps and self.settings.value("pos_source", "manuel") == "poste":
+            self.set_station(gps[0], gps[1], "GPS du poste")
+        self._track_band_power(st)
+        self._updating = True
+        try:
+            self._show_state(st)
+        finally:
+            self._updating = False
+
+    def _show_state(self, st):
+        p, unsup = st.p, st.unsupported
+        self.freq.set_freq(st.freq)
+        if "vfob" in p:
+            self.vfob.set_freq(p["vfob"])
+
+        b = self.mode_buttons.get(st.mode)
+        if b:
+            b.setChecked(True)
+        band = self.band_of(st.freq)
+        if band:
+            self.band_buttons[band].setChecked(True)
+        elif self.band_group.checkedButton():
+            self.band_group.setExclusive(False)
+            self.band_group.checkedButton().setChecked(False)
+            self.band_group.setExclusive(True)
+
+        for key, btn in self.toggles.items():
+            if key in p:
+                btn.setChecked(bool(p[key]))
+            btn.setEnabled(key not in unsup)
+        for key, btn in self.extra_toggles:
+            if key in p:
+                btn.setChecked(bool(p[key]))
+            btn.setEnabled(key not in unsup)
+        for key, (s, val, fmt) in self.sliders.items():
+            if key in p and not s.isSliderDown():
+                s.setValue(int(p[key]))
+                val.setText(fmt(int(p[key])))
+            s.setEnabled(key not in unsup)
+        for key, c in self.combos.items():
+            if key in p:
+                c.setCurrentIndex(min(int(p[key]), 4) if key == "agc" else int(p[key]))
+            c.setEnabled(key not in unsup)
+
+        if "pre" in p:
+            self.b_pre.setText(PRE_LABELS[p["pre"]] if p["pre"] in (0, 1, 2) else "IPO")
+            self.b_pre.setEnabled("pre" not in unsup)
+
+        if st.mode in ("CW", "CWR"):
+            self.wf.marker = 300 + 10 * p.get("pitch", 40)
+        elif st.mode in ("USB", "LSB", "PKTUSB", "PKTLSB", "RTTY", "RTTYR"):
+            self.wf.marker = 1500
+        else:
+            self.wf.marker = None
+        s_width = self.sliders["width"][0]
+        s_width.setMaximum(17 if st.mode in CW_LIKE else 21)
+        self.sliders["width"][1].setText(self.width_text(s_width.value()))
+
+        info = p.get("info", {})
+        if info:
+            vm = info.get("vm")
+            if vm in (1, 2):
+                tag = p.get("mem_tag") or next(
+                    (m.get("tag", "") for m in self.mem.memories if m["ch"] == info["ch"]), "")
+                self.lb_mem.setText(f"Mémoire {info['ch']:03d}   {tag}".rstrip())
+            else:
+                self.lb_mem.setText("QMB" if vm == 3 else "VFO")
+            self.b_vm.setChecked(bool(info.get("vm")))
+            self.b_rxclar.setChecked(bool(info.get("rx_clar")))
+            self.b_txclar.setChecked(bool(info.get("tx_clar")))
+            self.lb_clar.setText(f"{info.get('clar', 0):+05d} Hz")
+
+        self.b_ptt.setChecked(st.ptt)
+        if st.ptt:
+            self.meter_s.set_scale("Puissance émise", PO_SCALE, 1.01)
+            self.meter_s.set_value(st.po)
+            self.meter_swr.set_value(st.swr)
+            self.bar_alc.setValue(int(st.alc * 1000))
+            self.lb_meter.setText(f"SWR ≈ {st.swr_val:.1f}" if st.swr_val else "")
+        else:
+            self.meter_s.set_scale("S-mètre", S_SCALE, 130 / 255)
+            self.meter_s.set_value(st.smeter)
+            self.meter_swr.set_value(0)
+            self.bar_alc.setValue(0)
+            self.lb_meter.setText(st.s_text)
+
+
+def main():
+    app = QApplication(sys.argv)
+    from . import cty
+    cty.refresh_in_background()
+    app.setApplicationName("CAT Pilot FT-817")
+    lang = QSettings("F4JCF", "CATPilot-FT817").value("lang", "fr")
+    from PySide6.QtCore import QLibraryInfo, QTranslator
+    qt_tr = QTranslator(app)
+    if qt_tr.load(f"qtbase_{lang}", QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+        app.installTranslator(qt_tr)            # boutons standard (Oui, Non, Annuler…) dans la langue choisie
+    from . import i18n
+    i18n.install(lang)
+    from PySide6.QtGui import QIcon
+    base = getattr(sys, "_MEIPASS", os.path.join(os.path.dirname(__file__), ".."))
+    icon = os.path.join(base, "assets", "catpilot.ico")
+    if os.path.exists(icon):
+        app.setWindowIcon(QIcon(icon))
+    app.setStyleSheet(STYLE)
+    w = MainWindow()
+    w.apply_look()
+    w.show()
+    sys.exit(app.exec())

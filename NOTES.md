@@ -1,2 +1,4 @@
-Nouveautés de la 1.3.2 :
-- Import ADIF : le logiciel demande si le fichier a déjà été contrôlé. Oui : tout est importé sans recherche de doublons. Non : les doublons (même indicatif, bande et mode à 3 minutes près, avec le carnet ou dans le fichier lui-même) sont mis de côté et présentés dans une fenêtre où l'on coche ceux à importer quand même.
+Nouveautés de la 1.3.3 :
+- Carnet : colonne « Mon indicatif » (F4JCF, F4JCF/P, FR/F4JCF/P…) dans le tableau des QSO.
+- Fiche d'un QSO : champ « Mon indicatif » modifiable.
+- Clic droit sur une sélection de QSO : « Mon indicatif pour la sélection… » pour corriger d'un coup des QSO importés (le poste et l'antenne associés à cet indicatif sont ajoutés s'ils manquaient).

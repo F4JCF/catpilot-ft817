@@ -414,9 +414,9 @@ class HamQTH(QObject):
         self.result.emit(call, info)
 
 
-TABLE_COLS = ["Date", "UTC", "Indicatif", "Nom", "Pays", "Fréquence", "Bande", "Mode", "Env.", "Reçu",
+TABLE_COLS = ["Date", "UTC", "Indicatif", "Mon indicatif", "Nom", "Pays", "Fréquence", "Bande", "Mode", "Env.", "Reçu",
               "QSL", "eQSL", "LoTW", "♪", "Réf."]
-C_PAYS, C_FREQ, C_QSL, C_EQSL, C_LOTW, C_AUDIO = 4, 5, 10, 11, 12, 13
+C_MYCALL, C_PAYS, C_FREQ, C_QSL, C_EQSL, C_LOTW, C_AUDIO = 3, 5, 6, 11, 12, 13, 14
 
 
 class PhotoLoader(QObject):
@@ -1019,6 +1019,8 @@ class LogDock(QDockWidget):
         self.tbl.setHorizontalHeaderLabels(TABLE_COLS)
         for c in (C_EQSL, C_LOTW):
             self.tbl.horizontalHeaderItem(c).setToolTip("✔ confirmé · ↑ envoyé, en attente de confirmation")
+        self.tbl.horizontalHeaderItem(C_MYCALL).setToolTip("Indicatif avec lequel j'ai trafiqué (F4JCF, F4JCF/P…) ;\n"
+                                                           "clic droit sur une sélection pour le corriger")
         self.tbl.horizontalHeaderItem(C_QSL).setToolTip("Carte QSL papier : ✔ reçue · ↑ envoyée · ✉ à envoyer")
         self.tbl.horizontalHeaderItem(C_AUDIO).setToolTip("♪ enregistrement du QSO : clic pour l'écouter")
         self.tbl.setToolTip("Double-clic : modifier ou supprimer · clic droit : cartes QSL, étiquettes")
@@ -1390,7 +1392,7 @@ class LogDock(QDockWidget):
                                        ("moi : " + (r["my_sig"] or "") + " " + r["my_sig_info"]) if r["my_sig_info"] else "")
                            if x.strip())
             vals = [f"{d[6:8]}/{d[4:6]}/{d[:4]}" if len(d) == 8 else d, (r["time_on"] or "")[:4],
-                    r["call"], r["name"], country + (f" ({r['state']})" if r.get("state") else ""), fq, r["band"], r["submode"] or r["mode"], r["rst_sent"],
+                    r["call"], r.get("station_callsign") or r.get("operator") or "", r["name"], country + (f" ({r['state']})" if r.get("state") else ""), fq, r["band"], r["submode"] or r["mode"], r["rst_sent"],
                     r["rst_rcvd"], "", "", "", "♪" if r.get("audio_file") else "", ref.strip()]
             for c, val in enumerate(vals):
                 self.tbl.setItem(i, c, QTableWidgetItem(val or ""))
@@ -1464,6 +1466,9 @@ class LogDock(QDockWidget):
         a = m.addAction("Imprimer les étiquettes de toutes les cartes à envoyer…")
         a.triggered.connect(lambda: self.win.qsl_labels(None))
         m.addSeparator()
+        a = m.addAction(f"Mon indicatif pour la sélection ({n} QSO)…")
+        a.triggered.connect(lambda: self.set_mycall_for(recs))
+        m.addSeparator()
         if n == 1:
             a = m.addAction("Modifier ce QSO…")
             a.triggered.connect(lambda: QsoEditDialog(self, recs[0]).exec())
@@ -1473,6 +1478,31 @@ class LogDock(QDockWidget):
         a = m.addAction(f"Supprimer ({n})…")
         a.triggered.connect(self.delete_selected)
         m.exec(self.tbl.viewport().mapToGlobal(pos))
+
+    def set_mycall_for(self, recs):
+        """Corrige l'indicatif de trafic de plusieurs QSO (fichiers importés sans STATION_CALLSIGN…)."""
+        from PySide6.QtWidgets import QInputDialog
+        calls = my_calls(self.win.settings)
+        cur = recs[0].get("station_callsign") or (self.win.settings.value("mycall", "") or "").upper()
+        if cur in calls:
+            calls.remove(cur)
+        calls.insert(0, cur)
+        call, ok = QInputDialog.getItem(self, "Mon indicatif",
+                                        f"Indicatif avec lequel ces {len(recs)} QSO ont été faits :", calls, 0, True)
+        call = (call or "").strip().upper().replace(" ", "")
+        if not ok or not call:
+            return
+        if not CALL_RE.match(call):
+            QMessageBox.warning(self, "Mon indicatif", f"« {call} » ne ressemble pas à un indicatif.")
+            return
+        stn = station_of(self.win.settings, call)
+        for r in recs:
+            rec = {"station_callsign": call}
+            for key, field in (("rig", "my_rig"), ("antenna", "my_antenna")):
+                if stn.get(key) and not r.get(field):
+                    rec[field] = stn[key]
+            self.log.update(r["id"], rec, notify=False)
+        self.log.changed.emit()
 
     def mark_qsl(self, recs, rec):
         for r in recs:
@@ -1875,6 +1905,8 @@ class QsoEditDialog(QDialog):
         f.addRow("Mon activité", self.cb_mysig)
         line("my_sig_info", "Ma référence", rec.get("my_sig_info"))
         line("qsl_via", "QSL via", rec.get("qsl_via"))
+        line("station_callsign", "Mon indicatif", rec.get("station_callsign") or rec.get("operator"),
+             "ex. F4JCF, F4JCF/P, FR/F4JCF/P")
         line("comment", "Commentaire", rec.get("comment"))
         self.cb_qs = QComboBox()
         for label, val in (("non envoyée", ""), ("à envoyer", "R"), ("envoyée par le bureau", "Y/B"),
@@ -1938,6 +1970,7 @@ class QsoEditDialog(QDialog):
                "mode": mode, "submode": sub,
                "sig": self.cb_sig.currentText().strip().upper() if g("sig_info") else "",
                "my_sig": self.cb_mysig.currentText().strip().upper() if g("my_sig_info") else ""}
+        rec["station_callsign"] = g("station_callsign").upper().replace(" ", "")
         for k in ("rst_sent", "rst_rcvd", "name", "qth", "gridsquare", "sig_info", "my_sig_info", "qsl_via", "comment"):
             rec[k] = g(k).upper() if k in ("gridsquare", "sig_info", "my_sig_info", "qsl_via") and k != "gridsquare" else g(k)
         if rec["gridsquare"]:

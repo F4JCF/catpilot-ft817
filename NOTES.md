@@ -1,2 +1,2 @@
-Nouveautés de la 1.3.1 :
-- Carnet : quand QRZ.com ou HamQTH ne donnent pas le locator, il est lu sur la page publique QRZCQ.com (sans compte), ou à défaut pris au centre de la commune du QTH (stations françaises, geo.api.gouv.fr). Le département est alors trouvé et la carte du QSO tracée.
+Nouveautés de la 1.3.2 :
+- Import ADIF : le logiciel demande si le fichier a déjà été contrôlé. Oui : tout est importé sans recherche de doublons. Non : les doublons (même indicatif, bande et mode à 3 minutes près, avec le carnet ou dans le fichier lui-même) sont mis de côté et présentés dans une fenêtre où l'on coche ceux à importer quand même.

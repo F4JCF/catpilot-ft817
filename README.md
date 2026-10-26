@@ -124,6 +124,16 @@ et, si besoin, un locator (pour un /P).
   MY_GRIDSQUARE) ; la puissance sert aussi quand le poste ne la donne pas par
   le CAT (cas des FT-817/857/897).
 
+## Sauvegarde du carnet à la fermeture
+
+À la fermeture du logiciel, si le carnet a changé pendant la séance, une
+sauvegarde datée est créée dans `Documents\CATPilot-FT817\sauvegardes_carnet` :
+carnet complet (`carnet.sqlite`, `carnet.adi`) et modifications de la séance
+(`modifications.txt` : QSO ajoutés, modifiés, supprimés ; `modifications.adi`).
+Les 30 dernières sont gardées. Si la sauvegarde Nextcloud est configurée, le
+carnet y part aussi. Menu Carnet : activer ou non, ouvrir le dossier, restaurer
+une sauvegarde (le carnet actuel est d'abord sauvegardé).
+
 ## Partager le CAT avec WSJT-X
 
 Cocher « Serveur rigctld » (port **4534**). Dans WSJT-X : Radio « Hamlib NET

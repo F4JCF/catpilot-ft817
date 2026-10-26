@@ -62,6 +62,8 @@ class Log(QObject):
         self.path = path or os.path.join(data_dir(), "carnet.sqlite")
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.lock = threading.Lock()
+        # modifications de la séance (sauvegarde automatique à la fermeture)
+        self.session = {"added": [], "updated": set(), "deleted": []}
         cols = ", ".join(f"{f} TEXT" for f in FIELDS)
         with self.lock:
             self.db.execute(f"CREATE TABLE IF NOT EXISTS qso (id INTEGER PRIMARY KEY, {cols})")
@@ -85,6 +87,7 @@ class Log(QObject):
                                   [rec[k] for k in keys])
             self.db.commit()
             qid = cur.lastrowid
+        self.session["added"].append(qid)
         if notify:
             self.changed.emit()
             self.added.emit(qid)
@@ -132,10 +135,19 @@ class Log(QObject):
             self.db.execute(f"UPDATE qso SET {', '.join(k + ' = ?' for k in rec)} WHERE id = ?",
                             list(rec.values()) + [qid])
             self.db.commit()
+        self.session["updated"].add(qid)
         if notify:
             self.changed.emit()
 
+    def modified(self):
+        """Le carnet a-t-il changé pendant cette séance ?"""
+        ses = self.session
+        return bool(ses["added"] or ses["updated"] or ses["deleted"])
+
     def delete(self, qid):
+        old = self.query("id = ?", (qid,))
+        if old:
+            self.session["deleted"].append(old[0])
         with self.lock:
             self.db.execute("DELETE FROM qso WHERE id = ?", (qid,))
             self.db.commit()

@@ -869,7 +869,62 @@ class MainWindow(QMainWindow):
         self.sl_contrast.setValue(int(s.value("wf_contrast", 45)))
         self.sl_level.setValue(int(s.value("wf_level", 5)))
 
+    def _backup_log_on_close(self):
+        """Sauvegarde du carnet à la fermeture : copie locale datée, puis Nextcloud s'il est configuré."""
+        if not self.log.modified() or not self.act_log_backup.isChecked():
+            return
+        try:
+            from . import logbackup
+            folder = logbackup.save(self.log)
+            self.statusBar().showMessage(f"Carnet sauvegardé : {folder}")
+        except Exception as e:
+            QMessageBox.warning(self, "Sauvegarde du carnet", f"La sauvegarde du carnet a échoué :\n{e}")
+            return
+        bk = getattr(self, "backup", None)
+        if bk and bk.configured():
+            self.statusBar().showMessage("Sauvegarde du carnet sur Nextcloud…")
+            bk.run()
+            t0 = time.monotonic()
+            while bk.busy and time.monotonic() - t0 < 20:      # 20 s au plus, pour ne pas bloquer la fermeture
+                QApplication.processEvents()
+                time.sleep(0.05)
+
+    def open_log_backups(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from .logbackup import backup_root
+        QDesktopServices.openUrl(QUrl.fromLocalFile(backup_root()))
+
+    def restore_log_backup(self):
+        from . import logbackup
+        names = logbackup.list_backups()
+        if not names:
+            QMessageBox.information(self, "Restaurer le carnet", "Aucune sauvegarde du carnet pour l'instant.")
+            return
+        labels = []
+        for n in names:
+            try:
+                d = datetime.datetime.strptime(n[:17], "%Y-%m-%d_%H%M%S")
+                labels.append(f"{d:%d/%m/%Y à %H:%M:%S}" + (f" ({n[18:]})" if len(n) > 17 else ""))
+            except ValueError:
+                labels.append(n)
+        lab, ok = QInputDialog.getItem(self, "Restaurer le carnet", "Sauvegarde à restaurer :", labels, 0, False)
+        if not ok:
+            return
+        name = names[labels.index(lab)]
+        if QMessageBox.question(self, "Restaurer le carnet",
+                                f"Remplacer tout le carnet par la sauvegarde du {lab} ?\n\n"
+                                "Le carnet actuel est d'abord sauvegardé : vous pourrez y revenir.") != QMessageBox.Yes:
+            return
+        try:
+            logbackup.restore(self.log, name)
+        except Exception as e:
+            QMessageBox.warning(self, "Restaurer le carnet", f"Restauration impossible :\n{e}")
+            return
+        QMessageBox.information(self, "Restaurer le carnet", f"Carnet restauré : {self.log.count()} QSO.")
+
     def closeEvent(self, e):
+        self._backup_log_on_close()
         s = self.settings
         s.setValue("rig", self.cb_rig.currentText())
         s.setValue("port", self.cb_port.currentData() or "")
@@ -1326,6 +1381,8 @@ class MainWindow(QMainWindow):
                             ("Exporter l'activation du jour (POTA/SOTA)…", lambda: self.logdock.export_activation()),
                             (None, None),
                             ("Exporter un concours en Cabrillo…", lambda: self.logdock.export_cabrillo()),
+                            ("Ouvrir les sauvegardes du carnet", self.open_log_backups),
+                            ("Restaurer une sauvegarde du carnet…", self.restore_log_backup),
                             ("Sauvegarde Nextcloud…", self.backup_dialog),
                             ("Envoi en ligne : QRZ.com, eQSL, Club Log, LoTW…", self.upload_dialog),
                             ("Relever les confirmations eQSL et LoTW", self.qsl_sync_now),
@@ -1339,6 +1396,12 @@ class MainWindow(QMainWindow):
             a = QAction(label, self)
             a.triggered.connect(slot)
             cm.addAction(a)
+            if label.startswith("Ouvrir les sauvegardes"):
+                self.act_log_backup = QAction("Sauvegarder le carnet à la fermeture (s'il a changé)", self, checkable=True)
+                self.act_log_backup.setChecked(self.settings.value("log_backup_close", "true") in (True, "true"))
+                self.act_log_backup.toggled.connect(
+                    lambda on: self.settings.setValue("log_backup_close", "true" if on else "false"))
+                cm.insertAction(a, self.act_log_backup)
         h = mb.addMenu("Aide")
         a = QAction("Raccourcis clavier", self)
         a.triggered.connect(self.show_shortcuts)

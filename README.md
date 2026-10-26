@@ -9,6 +9,9 @@ ses propres réglages (`Documents\CATPilot-FT817`) et ses propres mises à jour.
 Les deux peuvent tourner en même temps sur le même PC (ports différents, voir
 plus bas).
 
+Un **mode d'emploi complet** est intégré au logiciel : menu Aide > Mode d'emploi
+(touche F1), avec recherche, impression et enregistrement en PDF.
+
 ## Installation
 
 - **Installateur** : `CATPilot-FT817-Setup-x.y.z.exe` dans la dernière version

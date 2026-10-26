@@ -1,0 +1,393 @@
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mode d'emploi — CAT Pilot FT-817</title>
+<style>
+h1 { font-size: 20pt; margin-bottom: 2px; }
+h2 { font-size: 14pt; margin-top: 18px; border-bottom: 1px solid #888; }
+h3 { font-size: 11.5pt; margin-top: 12px; }
+p, li, td { font-size: 10pt; }
+td, th { padding: 3px 6px; }
+th { text-align: left; }
+.note { font-style: italic; }
+.k { font-family: monospace; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>CAT Pilot FT-817 — mode d'emploi</h1>
+<p>Version {VERSION} — Yaesu FT-817, FT-818, FT-857 et FT-897 — Windows et Linux</p>
+
+<h2><a name="sommaire"></a>Sommaire</h2>
+<ol>
+<li><a href="#presentation">Présentation</a></li>
+<li><a href="#installation">Installation et mises à jour</a></li>
+<li><a href="#poste">Brancher et régler le poste</a></li>
+<li><a href="#connexion">Se connecter au poste</a></li>
+<li><a href="#facade">La face avant : fréquence, bandes, modes, mesures</a></li>
+<li><a href="#limites">Ce que le CAT de ces postes permet (ou non)</a></li>
+<li><a href="#trafic">Trafic au quotidien : profils, sécurité TX, chute d'eau</a></li>
+<li><a href="#memoires">Mémoires et scan</a></li>
+<li><a href="#carnet">Carnet de trafic</a></li>
+<li><a href="#indicatifs">Plusieurs indicatifs, chacun son matériel</a></li>
+<li><a href="#sauvegardes">Sauvegardes du carnet</a></li>
+<li><a href="#enligne">Carnets en ligne, confirmations, QSL papier, diplômes</a></li>
+<li><a href="#wsjtx">Partager le CAT avec WSJT-X et les autres logiciels</a></li>
+<li><a href="#numerique">Modes numériques intégrés : FT8, FT4, RTTY, PSK31, SSTV</a></li>
+<li><a href="#cw">CW au clavier</a></li>
+<li><a href="#vocal">Messages vocaux</a></li>
+<li><a href="#spots">Spots POTA, SOTA et DX cluster, carte</a></li>
+<li><a href="#adrasec">Main courante ADRASEC</a></li>
+<li><a href="#autres">Satellites, rotor, SDR, accès à distance</a></li>
+<li><a href="#affichage">Affichage, langue, raccourcis clavier</a></li>
+<li><a href="#fichiers">Où sont mes fichiers ?</a></li>
+<li><a href="#depannage">En cas de problème</a></li>
+<li><a href="#nouveautes">Nouveautés des versions</a></li>
+</ol>
+
+<h2><a name="presentation"></a>1. Présentation</h2>
+<p>CAT Pilot FT-817 pilote par le câble CAT les Yaesu <b>FT-817, FT-818, FT-857 et FT-897</b> :
+fréquence, mode, émission, mesures… Il réunit aussi un carnet de trafic, les modes numériques,
+les spots POTA/SOTA/DX, une main courante ADRASEC et le partage du CAT avec WSJT-X et les logiciels de log.</p>
+<p>C'est un logiciel <b>distinct</b> de CAT Pilot (FT-991A) : il s'installe à part, garde ses propres
+réglages et son propre carnet (<span class="k">Documents\CATPilot-FT817</span>), et a ses propres mises à jour.
+Les deux peuvent tourner en même temps sur le même PC.</p>
+<p>Ce mode d'emploi s'ouvre par le menu <b>Aide &gt; Mode d'emploi</b> ou la touche <b>F1</b>. Les boutons
+du haut du panneau permettent de le <b>rechercher</b>, de l'<b>imprimer</b> ou de l'<b>enregistrer en PDF</b>.</p>
+
+<h2><a name="installation"></a>2. Installation et mises à jour</h2>
+<h3>Windows</h3>
+<ul>
+<li>Télécharger <span class="k">CATPilot-FT817-Setup-x.y.z.exe</span> sur
+<a href="https://github.com/F4JCF/catpilot-ft817/releases/latest">github.com/F4JCF/catpilot-ft817/releases</a>
+et le lancer : installation pour votre compte, sans droits d'administrateur, avec raccourcis sur le bureau
+et dans le menu Démarrer.</li>
+<li>Sans installation : <span class="k">CATPilot-FT817.exe</span>, à lancer tel quel.</li>
+</ul>
+<h3>Linux (64 bits : Ubuntu 22.04, Debian 12, Mint 21, Fedora 36 ou plus récents)</h3>
+<ul>
+<li>Télécharger <span class="k">CATPilot-FT817-linux-x86_64.tar.gz</span>, le décompresser, puis dans un
+terminal ouvert dans ce dossier : <span class="k">./install.sh</span></li>
+<li>Le script propose d'ajouter votre compte au groupe <b>dialout</b> (accès au câble CAT ; fermer puis
+rouvrir la session ensuite) et d'installer <b>PortAudio</b> (audio : chute d'eau, FT8, messages vocaux).</li>
+<li>Le câble CAT apparaît comme <span class="k">/dev/ttyUSB0</span> ou <span class="k">/dev/ttyACM0</span>.
+Désinstallation : <span class="k">./install.sh --desinstaller</span>.</li>
+</ul>
+<h3>Mises à jour</h3>
+<ul>
+<li>Au démarrage puis toutes les 6 heures, le logiciel regarde si une nouvelle version existe.
+Si oui, le menu <b>Mise à jour</b> s'affiche <b>en orange</b>.</li>
+<li><b>Mise à jour &gt; Vérifier les mises à jour…</b> puis <b>Mettre à jour maintenant</b> : téléchargement,
+vérification de l'empreinte, remplacement du programme et redémarrage automatiques (Windows et Linux).</li>
+<li>« Vérifier au démarrage » peut être décoché dans ce menu.</li>
+</ul>
+
+<h2><a name="poste"></a>3. Brancher et régler le poste</h2>
+<ul>
+<li><b>Câble CAT</b> : CT-62 ou équivalent USB-série, Digirig, SCU-17… sur la prise
+<b>ACC</b> (FT-817/818) ou <b>CAT/LINEAR</b> (FT-857/897).</li>
+<li><b>Vitesse</b> : menu <b>CAT RATE</b> du poste (FT-817/818 : menu 14 ; FT-857/897 : menu 019),
+4800 bauds par défaut. Mettre la même valeur dans le logiciel, avec <b>2 bits de stop</b>.</li>
+<li><b>Audio</b> : ces postes n'ont pas de carte son USB. Pour la chute d'eau, FT8, les messages vocaux,
+il faut une interface audio (Digirig, SCU-17, Signalink…) sur la prise DATA, et la choisir dans la liste
+des entrées audio.</li>
+<li><b>FT8 et numériques</b> : le mode <b>DATA-U</b> du logiciel correspond au mode <b>DIG</b> du poste ;
+régler le menu <b>DIG MODE</b> du poste sur <b>USER-U</b>.</li>
+<li>Le logiciel garde les lignes RTS et DTR du port au repos : une interface qui fait émettre le poste
+par RTS (Digirig…) ne passe pas en émission à la connexion.</li>
+</ul>
+
+<h2><a name="connexion"></a>4. Se connecter au poste</h2>
+<p>En bas de la fenêtre, cadre <b>Liaison et partage du CAT</b> :</p>
+<ol>
+<li>Choisir le poste (FT-817, FT-818, FT-857, FT-897, ou « Simulateur » pour essayer sans poste).</li>
+<li>Choisir le <b>port</b> du câble (bouton ⟳ pour actualiser la liste), la <b>vitesse</b> et les bits de stop.</li>
+<li>Cliquer sur <b>Connecter</b>. La barre d'état indique « Connecté : … ».</li>
+</ol>
+<ul>
+<li>Options : se connecter au lancement, allumer le poste à la connexion, l'éteindre à la fermeture
+(le poste doit rester alimenté et relié au câble CAT).</li>
+<li>Le port, la vitesse et les bits de stop sont <b>mémorisés pour chaque poste</b>.</li>
+<li>Si la liaison est perdue, le logiciel se reconnecte tout seul toutes les 5 secondes.</li>
+<li>Menu <b>Poste</b> : allumer et connecter, éteindre et déconnecter, position de la station,
+coupure de l'émission hors des bandes amateurs.</li>
+</ul>
+
+<h2><a name="facade"></a>5. La face avant</h2>
+<ul>
+<li><b>Fréquence</b> : molette de la souris sur un chiffre pour régler ce chiffre ; saisie directe en MHz
+(ex. 145.500 puis Entrée) ; bouton <b>Récents</b> (10 dernières fréquences) ; choix du pas.</li>
+<li><b>Plan de bandes</b> sous la fréquence : segments IARU Région 1 (CW, numérique, BLU, relais, satellites…).</li>
+<li><b>Bandes</b> : 160 m à 70 cm ; chaque bande retrouve la dernière fréquence utilisée.</li>
+<li><b>VFO</b> : A/B (bascule), A&gt;B, B&gt;A, VFO B réglable à la molette, <b>Split</b>, <b>LOCK</b>
+(verrouillage du bouton d'accord du poste), UP/DN.</li>
+<li><b>Modes</b> : USB, LSB, CW, CW-R, AM, FM, DATA-U (DIG), DATA-FM (PKT).</li>
+<li><b>Clarifier et relais FM</b> : clarifier RX ±10 / ±100 Hz et CLR ; décalage relais simplex / + / − ;
+tonalité CTCSS (TSQ ou à l'émission) ou DCS, et sa fréquence.</li>
+<li><b>Émission</b> : bouton <b>MOX</b> (ou F12).</li>
+<li><b>Mesures</b> : S-mètre ; en émission, puissance, ROS et ALC (FT-817/818/897) ou puissance et
+alarme de ROS (FT-857).</li>
+<li><b>Chute d'eau</b> : choisir l'entrée audio de l'interface, puis « Chute d'eau ». Réglages de contraste et
+de seuil ; « ● Enregistrer » enregistre la réception en WAV.</li>
+</ul>
+
+<h2><a name="limites"></a>6. Ce que le CAT de ces postes permet (ou non)</h2>
+<p>Le CAT des FT-817/818/857/897 est bien plus limité que celui d'un FT-991A. Le logiciel n'affiche donc
+que ce qui se pilote réellement.</p>
+<table border="1" cellspacing="0">
+<tr><th>Fonction</th><th>Par le logiciel</th></tr>
+<tr><td>Fréquence, mode, émission, S-mètre, mesures d'émission</td><td>oui</td></tr>
+<tr><td>VFO A/B, split, LOCK, clarifier, relais FM, CTCSS/DCS</td><td>oui</td></tr>
+<tr><td>Allumer / éteindre le poste</td><td>oui</td></tr>
+<tr><td>Volume, gain HF, squelch, puissance, micro, VOX, processeur</td><td>non : sur le poste</td></tr>
+<tr><td>Filtres, NB, DSP, AGC, ATT, IPO, keyer, vitesse CW</td><td>non : sur le poste</td></tr>
+<tr><td>Menus et mémoires du poste</td><td>non (mémoires : banque sur le PC)</td></tr>
+</table>
+<ul>
+<li>Le poste ne renvoie pas l'état du décalage relais, de la tonalité ni du clarifier : le logiciel
+affiche ce qu'il a lui-même réglé.</li>
+<li>Le split est relu dans le poste sur FT-817/818 ; sur FT-857/897 il est suivi par le logiciel.</li>
+<li>Au démarrage, le logiciel lit la fréquence du VFO B (bascule A/B très brève).</li>
+<li>Le logiciel n'écrit <b>jamais</b> dans l'EEPROM du poste.</li>
+</ul>
+
+<h2><a name="trafic"></a>7. Trafic au quotidien</h2>
+<ul>
+<li><b>Profils</b> (barre du haut) : « FT8 20 m », « BLU 40 m »… règlent d'un clic fréquence et mode.
+« Enregistrer… » crée un profil à partir de la fréquence et du mode actuels.</li>
+<li><b>Sécurité TX</b> : coupure de l'émission au-delà d'une durée réglable, quel que soit le logiciel qui
+émet (3 min par défaut, « désactivée » = 0).</li>
+<li><b>Clic sur la chute d'eau</b> : en BLU, DATA ou CW, le poste s'accorde sur le signal cliqué ;
+la ligne pointillée montre où il sera placé.</li>
+<li><b>Horloge et propagation</b> (barre du haut) : heure UTC et locale, flux solaire, indices A et K,
+état des bandes ; un clic actualise.</li>
+<li><b>Position de la station</b> : clic sur le locator de la barre du haut (locator saisi ou GPS NMEA).</li>
+</ul>
+
+<h2><a name="memoires"></a>8. Mémoires et scan (bouton « Mémoires », Ctrl+M)</h2>
+<p>Les mémoires du poste ne sont pas lisibles par le CAT : le panneau gère une <b>banque de canaux sur
+le PC</b>.</p>
+<ul>
+<li><b>Ajouter un canal</b> : fréquence et mode actuels. Double-clic sur une case pour la modifier
+(nom, fréquence, mode, relais, tonalité) ; les lignes modifiées passent en jaune.</li>
+<li><b>Enregistrer la banque PC</b> enregistre les lignes en jaune ; <b>Charger la banque PC</b> la relit.</li>
+<li><b>Double-clic sur le numéro</b> : le poste se règle sur le canal (fréquence, mode, décalage, tonalité).</li>
+<li>Import / export CSV (séparateur « ; »), compatible avec CAT Pilot.</li>
+<li><b>Scan</b> des canaux du tableau ou d'une plage de fréquences : arrêt sur un signal au-dessus du seuil,
+écoute de quelques secondes puis reprise (0 s = arrêt définitif). Échap arrête le scan.</li>
+</ul>
+
+<h2><a name="carnet"></a>9. Carnet de trafic (bouton « Carnet », Ctrl+L)</h2>
+<h3>Saisir un QSO</h3>
+<ol>
+<li>Taper l'indicatif du correspondant puis <b>Entrée</b> : recherche sur QRZ.com, HamQTH et QRZCQ
+(selon les comptes réglés dans <b>Carnet &gt; Réglages</b>) : nom, QTH, locator, distance et cap, photo.
+« Déjà contacté » s'affiche dès la saisie.</li>
+<li>RST préremplis selon le mode ; fréquence, mode et heure UTC sont pris sur le poste.</li>
+<li>Activités : la sienne et la vôtre (POTA, SOTA…) avec la référence.</li>
+<li><b>Enregistrer le QSO</b> (ou Entrée dans le champ Commentaire).</li>
+</ol>
+<h3>Département et carte du QSO</h3>
+<ul>
+<li>Pour une station française, le <b>département</b> (« 38 — Isère ») est trouvé d'après le code postal
+(QRZ.com, HamQTH), sinon d'après le locator ; DOM d'après le préfixe (FG, FM, FY, FR, FH).
+Il est modifiable à la main (« 38 » ou « Isère »).</li>
+<li>Si aucun site ne donne le locator, il est lu sur la page publique de QRZCQ.com, ou pris au centre
+de la commune du QTH (indiqué « locator du centre de la commune »).</li>
+<li>La <b>carte</b> à droite de la fiche montre votre station (rouge), le correspondant (orange), le trajet,
+la distance, le cap et le département en surbrillance. Molette : zoom ; double-clic : recadrer.</li>
+</ul>
+<h3>Le tableau des QSO</h3>
+<ul>
+<li>Colonnes : date, heure UTC, indicatif, <b>mon indicatif</b>, nom, pays (et département), fréquence,
+bande, mode, RST, cartes QSL, eQSL, LoTW, enregistrement sonore (♪, clic pour écouter), références.</li>
+<li>Recherche par indicatif au-dessus du tableau. <b>Double-clic</b> sur une ligne : modifier ou supprimer le QSO.</li>
+<li><b>Clic droit</b> sur une sélection : état des cartes QSL papier, étiquettes, <b>mon indicatif pour la
+sélection</b> (corriger d'un coup des QSO importés), modifier, supprimer.</li>
+<li>« Enregistrer le son » (ou « auto ») : enregistre l'audio du QSO, réécoutable depuis le tableau.</li>
+<li><b>Concours</b> : numéros de série, échange envoyé et reçu, contrôle des doublons du concours,
+export Cabrillo (menu Carnet).</li>
+</ul>
+<h3>Importer un fichier ADIF</h3>
+<ol>
+<li><b>Carnet &gt; Importer un fichier ADIF…</b> et choisir le fichier.</li>
+<li>Le logiciel demande si le fichier <b>a déjà été contrôlé</b> :
+<ul>
+<li><b>Oui</b> : tout est importé, sans recherche de doublons ;</li>
+<li><b>Non</b> : les doublons (même indicatif, même bande, même mode, à 3 minutes près, avec le carnet ou
+dans le fichier lui-même) sont mis de côté et affichés dans une fenêtre : cochez ceux à importer quand même
+(case ou double-clic, « Tout cocher », « Tout décocher »), puis « Importer les QSO cochés ».</li>
+</ul></li>
+<li>Le logiciel demande ensuite s'il faut envoyer ces QSO aux carnets en ligne lors du prochain envoi.</li>
+</ol>
+<h3>Exporter</h3>
+<ul>
+<li>Tout le carnet en ADIF ; l'<b>activation du jour</b> au nom de fichier attendu par POTA
+(INDICATIF@REF-DATE.adi) ; un concours en Cabrillo.</li>
+</ul>
+
+<h2><a name="indicatifs"></a>10. Plusieurs indicatifs, chacun son matériel</h2>
+<ul>
+<li>En haut du carnet, <b>Je trafique en</b> garde la liste de vos indicatifs : F4JCF, F4JCF/P,
+FR/F4JCF/P… Taper un nouvel indicatif puis Entrée pour l'ajouter ; « Retirer » l'enlève de la liste.</li>
+<li>Le bouton <b>Matériel…</b> associe à l'indicatif choisi : <b>poste</b>, <b>antenne</b>, <b>puissance</b>
+et, si besoin, un <b>locator</b> (pour un /P). Exemple : F4JCF = FT-991A, 100 W, verticale ;
+F4JCF/P = FT-817, 5 W, EFHW, JN33KN.</li>
+<li>En changeant d'indicatif : le locator de la station suit (retour à la position habituelle si aucun),
+et si le poste est l'un de ceux que ce logiciel pilote, il est choisi dans « Liaison » avec son port et
+sa vitesse (confirmation demandée si un autre poste est connecté).</li>
+<li>Chaque QSO enregistre l'indicatif utilisé et le matériel (ADIF STATION_CALLSIGN, MY_RIG, MY_ANTENNA,
+TX_PWR, MY_GRIDSQUARE). La puissance de la fiche sert quand le poste ne la donne pas par le CAT.</li>
+</ul>
+
+<h2><a name="sauvegardes"></a>11. Sauvegardes du carnet</h2>
+<ul>
+<li><b>À la fermeture du logiciel</b>, si le carnet a changé pendant la séance, une sauvegarde datée est
+créée dans <span class="k">Documents\CATPilot-FT817\sauvegardes_carnet</span> :
+<ul>
+<li><span class="k">carnet.sqlite</span> et <span class="k">carnet.adi</span> : le carnet complet ;</li>
+<li><span class="k">modifications.txt</span> : la liste des QSO ajoutés, modifiés et supprimés pendant la séance ;</li>
+<li><span class="k">modifications.adi</span> : les QSO ajoutés ou modifiés.</li>
+</ul>
+Les 30 dernières sauvegardes sont gardées.</li>
+<li>Menu <b>Carnet</b> : « Sauvegarder le carnet à la fermeture » (activé par défaut), « Ouvrir les
+sauvegardes du carnet », « <b>Restaurer une sauvegarde du carnet…</b> » (le carnet actuel est d'abord
+sauvegardé : on peut toujours revenir en arrière).</li>
+<li><b>Sauvegarde Nextcloud</b> (menu Carnet) : carnet, main courante et réglages (sans mot de passe)
+envoyés une fois par jour et à la fermeture si le carnet a changé. Utiliser un « mot de passe
+d'application » Nextcloud. Une adresse WebDAV (kDrive, ownCloud…) convient aussi.</li>
+</ul>
+
+<h2><a name="enligne"></a>12. Carnets en ligne, confirmations, QSL papier, diplômes</h2>
+<ul>
+<li><b>Envoi en ligne</b> (menu Carnet) : QRZ.com, eQSL, Club Log et LoTW (par TQSL). Seuls les QSO pas
+encore envoyés partent ; envoi automatique après chaque QSO en option.</li>
+<li><b>Confirmations</b> : relevé des QSL eQSL et LoTW, rapprochées des QSO du carnet (colonnes eQSL et LoTW).</li>
+<li><b>Cartes QSL papier</b> : clic droit dans le tableau pour marquer « à envoyer », « envoyée (bureau /
+direct) », « reçue » ; étiquettes à coller, en PDF sur planches A4.</li>
+<li><b>Diplômes et statistiques</b> : pays DXCC, continents (WAC), zones CQ (WAZ) et ITU, carrés locator,
+parcs POTA, bandes et modes, graphiques.</li>
+</ul>
+
+<h2><a name="wsjtx"></a>13. Partager le CAT avec WSJT-X et les autres logiciels</h2>
+<ul>
+<li>Cocher <b>Serveur rigctld</b> (port <b>4534</b>) dans le cadre Liaison.</li>
+<li>Dans WSJT-X (ou JTDX, Log4OM, N1MM…) : radio « <b>Hamlib NET rigctl</b> », serveur
+<span class="k">127.0.0.1:4534</span>, PTT « CAT », mode « Data/Pkt ».</li>
+<li>Le port est 4534 (et non 4532) pour pouvoir utiliser CAT Pilot FT-991A en même temps.</li>
+<li><b>Panneau WSJT-X</b> : dans WSJT-X, Paramètres &gt; Rapports &gt; serveur UDP 127.0.0.1 port 2237,
+« Accepter les requêtes UDP ». CAT Pilot liste les stations entendues (nouveaux indicatifs en vert) ;
+double-clic : WSJT-X appelle la station. Les QSO de WSJT-X sont inscrits au carnet.</li>
+</ul>
+
+<h2><a name="numerique"></a>14. Modes numériques intégrés (bouton « Numérique »)</h2>
+<ul>
+<li><b>FT8 / FT4</b> : décodage des créneaux ; double-clic sur un CQ : le logiciel répond, mène le QSO
+jusqu'au 73 et le note au carnet.</li>
+<li><b>RTTY et PSK31</b> : trafic clavier à clavier, messages programmables.</li>
+<li><b>SSTV</b> : réception (mode reconnu tout seul) et émission d'images.</li>
+<li>Il faut l'interface audio et le poste en DATA-U (menu DIG MODE du poste sur USER-U). Le niveau
+d'émission se règle pour que l'ALC bouge à peine.</li>
+</ul>
+
+<h2><a name="cw"></a>15. CW au clavier (bouton « CW clavier »)</h2>
+<ul>
+<li>Pas de keyer pilotable par le CAT sur ces postes : la manipulation se fait par la ligne <b>DTR ou RTS</b>
+d'une interface reliée à la prise <b>KEY</b> du poste (Digirig, interface CW série…). Choisir la ligne et
+le port (différent du port CAT, sauf si l'interface le permet).</li>
+<li>Vitesse réglée dans le panneau ; messages programmables F1 à F5 (Alt+F1…F5) avec {MYCALL}, {CALL},
+{NR} ; CQ automatique ; décodage CW de la réception.</li>
+</ul>
+
+<h2><a name="vocal"></a>16. Messages vocaux (bouton « Messages vocaux »)</h2>
+<ul>
+<li>6 messages enregistrés au micro du PC, émis d'un clic ou par Ctrl+F1 à F4 : le logiciel passe en
+émission, joue le message sur la sortie audio de l'interface, puis repasse en réception.</li>
+<li>Le mode bascule en DATA pendant le message (modulation prise sur la prise DATA), puis revient.</li>
+<li>Appel en boucle : « Répéter toutes les N s ». Échap ou Stop arrêtent tout.</li>
+</ul>
+
+<h2><a name="spots"></a>17. Spots POTA, SOTA et DX cluster, carte</h2>
+<ul>
+<li>Bouton <b>Spots</b> : onglets POTA, SOTA et DX cluster (choix du serveur). Filtres par bande et mode ;
+indicatifs déjà contactés grisés ; alertes (nouveau pays…) ; balises NCDXF / IARU (quelle balise émet
+en ce moment sur chaque bande).</li>
+<li><b>Double-clic sur un spot</b> : le poste s'accorde et le QSO est préparé dans le carnet avec la référence.</li>
+<li>Bouton <b>Carte</b> : ligne grise jour/nuit, votre station, spots et QSO.</li>
+</ul>
+
+<h2><a name="adrasec"></a>18. Main courante ADRASEC (bouton « ADRASEC MC »)</h2>
+<ul>
+<li>Journal horodaté des messages d'une opération ou d'un exercice ; chaque opération a sa propre liste numérotée.</li>
+<li>Saisie rapide : l'heure se fige au premier caractère tapé, le moyen radio vient du poste.</li>
+<li>Recherche, export PDF et CSV.</li>
+</ul>
+
+<h2><a name="autres"></a>19. Satellites, rotor, SDR, accès à distance</h2>
+<ul>
+<li><b>Satellites</b> : passages des prochaines 24 h, position en temps réel, suivi avec correction Doppler
+(réception VFO A, émission VFO B en split), tonalité des relais FM, rotor piloté.</li>
+<li><b>Rotor</b> : Yaesu GS-232 et compatibles, ou rotctld ; orientation par clic, cap, locator, ou
+automatiquement vers un spot ou un correspondant.</li>
+<li><b>SDR</b> : clé RTL-SDR (USB ou rtl_tcp) en panoramique centré sur la fréquence du poste ; clic sur un
+signal pour s'y accorder. Le SDR doit avoir sa propre antenne.</li>
+<li><b>Accès à distance</b> : un PC « station » relié au poste, un PC « distant » ailleurs, audio compris
+(port 4541, mot de passe par défi-réponse). Pour Internet, passer par un VPN (WireGuard, Tailscale).</li>
+<li>Menu <b>Poste</b> : programmateur (réglage du poste à heure fixe, avec rappel), profils d'antenne par
+bande (antenne et rappel affichés au changement de bande), analyseur de ROS (balayage d'une bande),
+journal de la liaison CAT.</li>
+</ul>
+
+<h2><a name="affichage"></a>20. Affichage, langue, raccourcis clavier</h2>
+<ul>
+<li>Menu <b>Affichage</b> : panneaux, mode nuit (Ctrl+N), taille du texte, mode compact (Ctrl+K),
+panneaux en grand, langue (français / anglais).</li>
+<li>Les panneaux s'ouvrent en onglets à droite ; on peut les détacher et les déplacer.</li>
+</ul>
+<table border="1" cellspacing="0">
+<tr><th>Touche</th><th>Action</th></tr>
+<tr><td>F1</td><td>Mode d'emploi</td></tr>
+<tr><td>F12</td><td>Émission (MOX) marche / arrêt</td></tr>
+<tr><td>Ctrl + ↑ / ↓</td><td>Accord d'un pas (Ctrl + Maj : 10 pas)</td></tr>
+<tr><td>Page préc. / Page suiv.</td><td>Bande suivante / précédente</td></tr>
+<tr><td>Ctrl + M</td><td>Mémoires</td></tr>
+<tr><td>Ctrl + W</td><td>Chute d'eau marche / arrêt</td></tr>
+<tr><td>Ctrl + L</td><td>Saisir un QSO dans le carnet</td></tr>
+<tr><td>Alt + F1 à F5</td><td>Messages CW</td></tr>
+<tr><td>Ctrl + F1 à F4</td><td>Messages vocaux</td></tr>
+<tr><td>Ctrl + K / Ctrl + N</td><td>Mode compact / mode nuit</td></tr>
+<tr><td>Échap</td><td>Arrêter le scan, la CW et les messages</td></tr>
+</table>
+
+<h2><a name="fichiers"></a>21. Où sont mes fichiers ?</h2>
+<p>Tout est dans <span class="k">Documents\CATPilot-FT817</span> (sous Linux : <span class="k">~/Documents/CATPilot-FT817</span>) :</p>
+<table border="1" cellspacing="0">
+<tr><td>carnet.sqlite</td><td>le carnet de trafic</td></tr>
+<tr><td>sauvegardes_carnet\</td><td>sauvegardes automatiques du carnet</td></tr>
+<tr><td>memoires_pc.json</td><td>banque de mémoires</td></tr>
+<tr><td>main_courante.sqlite</td><td>main courante ADRASEC</td></tr>
+<tr><td>enregistrements\, sstv\, messages\</td><td>sons enregistrés, images SSTV, messages vocaux</td></tr>
+<tr><td>journal_cat.txt</td><td>journal de la liaison CAT (utile en cas de coupure)</td></tr>
+</table>
+
+<h2><a name="depannage"></a>22. En cas de problème</h2>
+<ul>
+<li><b>Le poste ne répond pas</b> : vérifier le port, la vitesse (même valeur que le menu CAT RATE du poste)
+et <b>2 bits de stop</b> ; qu'aucun autre logiciel n'utilise le port.</li>
+<li><b>Linux, port refusé</b> : ajouter le compte au groupe dialout
+(<span class="k">sudo usermod -aG dialout $USER</span>) puis rouvrir la session.</li>
+<li><b>Pas d'audio, pas de chute d'eau</b> : choisir l'entrée audio de l'interface ; sous Linux, installer
+PortAudio (paquet libportaudio2).</li>
+<li><b>FT8 n'émet pas ou émet mal</b> : poste en DIG avec DIG MODE = USER-U ; niveau audio réglé pour que
+l'ALC bouge à peine.</li>
+<li><b>Coupures de liaison</b> : le fichier journal_cat.txt indique ce qui s'est passé.</li>
+</ul>
+
+<h2><a name="nouveautes"></a>23. Nouveautés des versions</h2>
+{NOUVEAUTES}
+
+<p class="note">CAT Pilot FT-817 — F4JCF — logiciel libre (GPL v3).
+Pilote CAT établi d'après les manuels Yaesu et les pilotes Hamlib ; contours des départements :
+IGN Admin Express (Licence ouverte Etalab).</p>
+</body>
+</html>

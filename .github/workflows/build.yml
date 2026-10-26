@@ -26,7 +26,7 @@ jobs:
             exit 1
           fi
           python -c "import ctypes; ctypes.CDLL(r'catpilot/ft8lib.dll')" || { echo "::error::ft8lib.dll ne se charge pas"; exit 1; }
-      - run: pyinstaller --noconfirm --onefile --windowed --name CATPilot-FT817 --icon assets/catpilot.ico --add-data "assets;assets" --add-binary "catpilot/ft8lib.dll;." --collect-all pyrtlsdrlib --collect-all sstv --hidden-import PySide6.QtTextToSpeech run.py
+      - run: pyinstaller --noconfirm --onefile --windowed --name CATPilot-FT817 --icon assets/catpilot.ico --add-data "assets;assets" --add-binary "catpilot/ft8lib.dll;." --collect-all pyrtlsdrlib --collect-all sstv --hidden-import PySide6.QtTextToSpeech --hidden-import PySide6.QtPrintSupport run.py
       - name: Auto-test de l'exécutable Windows (FT8, FT4, PSK31, RTTY, SSTV)
         shell: bash
         run: |
@@ -72,7 +72,7 @@ jobs:
         run: |
           python native/build_ft8.py
           python -c "import ctypes; ctypes.CDLL('catpilot/libft8lib.so')"
-      - run: pyinstaller --noconfirm --onefile --windowed --name CATPilot-FT817-linux-x86_64 --add-data "assets:assets" --add-binary "catpilot/libft8lib.so:." --collect-all pyrtlsdrlib --collect-all sstv --hidden-import PySide6.QtTextToSpeech run.py
+      - run: pyinstaller --noconfirm --onefile --windowed --name CATPilot-FT817-linux-x86_64 --add-data "assets:assets" --add-binary "catpilot/libft8lib.so:." --collect-all pyrtlsdrlib --collect-all sstv --hidden-import PySide6.QtTextToSpeech --hidden-import PySide6.QtPrintSupport run.py
       - name: Auto-test de l'exécutable Linux (FT8, FT4, PSK31, RTTY, SSTV)
         run: |
           QT_QPA_PLATFORM=offscreen timeout 120 ./dist/CATPilot-FT817-linux-x86_64 --selftest selftest.txt || true

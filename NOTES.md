@@ -1,4 +1,2 @@
-Nouveautés de la 1.4.0 :
-- Sauvegarde automatique du carnet à la fermeture du logiciel, s'il a été modifié pendant la séance : dossier daté dans Documents\CATPilot-FT817\sauvegardes_carnet avec le carnet complet (SQLite et ADIF) et la liste des modifications de la séance (QSO ajoutés, modifiés, supprimés ; modifications.txt et modifications.adi). Les 30 dernières sauvegardes sont gardées.
-- Si la sauvegarde Nextcloud est configurée, le carnet y est aussi envoyé à la fermeture (20 secondes au plus).
-- Menu Carnet : « Sauvegarder le carnet à la fermeture » (activé par défaut), « Ouvrir les sauvegardes du carnet », « Restaurer une sauvegarde du carnet… » (le carnet actuel est d'abord sauvegardé).
+Nouveautés de la 1.5.0 :
+- Mode d'emploi intégré au logiciel : menu Aide > Mode d'emploi, touche F1, ou bouton « Mode d'emploi » des panneaux. Il s'ouvre en onglet, avec sommaire cliquable, recherche, taille du texte, impression et enregistrement en PDF (A4). Il contient l'historique des nouveautés de chaque version et sera tenu à jour à chaque version.
